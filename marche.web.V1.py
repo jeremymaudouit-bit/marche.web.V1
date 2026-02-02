@@ -193,7 +193,7 @@ with st.sidebar:
     smooth = st.slider("Lissage band-pass",0,10,3)
     src = st.radio("Source",["Vidéo","Caméra"])
     camera_pos = st.selectbox("Position de la caméra", ["Devant", "Droite", "Gauche"])
-    phase_droite = st.checkbox("Phase du pas basée sur le côté droit (sinon gauche)", value=True)
+    phase_cote = st.selectbox("Phase du pas basée sur :", ["Droite", "Gauche", "Les deux"])
 
 video = st.file_uploader("Vidéo",["mp4","avi","mov"]) if src=="Vidéo" else st.camera_input("Caméra")
 
@@ -208,18 +208,24 @@ if video and st.button("▶ Lancer l'analyse"):
     data, heel_y, frames = process_video(tmp.name)
     os.unlink(tmp.name)
 
-    # Détecter la phase du pas sur le côté choisi
-    if phase_droite:
+    # Détecter la phase selon le côté choisi
+    if phase_cote == "Droite":
         heel_f_ref = bandpass(np.array(data["Cheville D"]), smooth)
-        phase_color = "blue"
-    else:
+        c0, c1 = detect_cycle(heel_f_ref)
+        phase_colors = [(c0, c1, "blue")]
+    elif phase_cote == "Gauche":
         heel_f_ref = bandpass(np.array(data["Cheville G"]), smooth)
-        phase_color = "orange"
-
-    c0, c1 = detect_cycle(heel_f_ref)
+        c0, c1 = detect_cycle(heel_f_ref)
+        phase_colors = [(c0, c1, "orange")]
+    else:  # Les deux
+        heel_f_D = bandpass(np.array(data["Cheville D"]), smooth)
+        heel_f_G = bandpass(np.array(data["Cheville G"]), smooth)
+        c0_D, c1_D = detect_cycle(heel_f_D)
+        c0_G, c1_G = detect_cycle(heel_f_G)
+        phase_colors = [(c0_D, c1_D, "blue"), (c0_G, c1_G, "orange")]
 
     key_img = os.path.join(tempfile.gettempdir(),"keyframe.png")
-    cv2.imwrite(key_img, frames[(c0+c1)//2])
+    cv2.imwrite(key_img, frames[len(frames)//2])
 
     figs, table_data = {}, []
 
@@ -231,7 +237,8 @@ if video and st.button("▶ Lancer l'analyse"):
 
         ax1.plot(g,label="Gauche",color="red")
         ax1.plot(d,label="Droite",color="blue")
-        ax1.axvspan(c0, c1, color=phase_color, alpha=0.3)
+        for c0, c1, color in phase_colors:
+            ax1.axvspan(c0, c1, color=color, alpha=0.3)
         ax1.set_title(f"{joint} – Analyse")
         ax1.legend()
 
@@ -254,7 +261,7 @@ if video and st.button("▶ Lancer l'analyse"):
             "nom": nom,
             "prenom": prenom,
             "camera": camera_pos,
-            "phase_cote": "Droite" if phase_droite else "Gauche"
+            "phase_cote": phase_cote
         },
         keyframe=key_img,
         figures=figs,
