@@ -166,26 +166,28 @@ if video_ready and st.button("⚙️ Lancer l'analyse"):
 
         joint_imgs = {}
         summary_table = []
-        # Affichage 2 courbes par colonne
-        col1, col2 = st.columns(2)
-        for i, joint_pair in enumerate([("Hanche G","Hanche D"),("Genou G","Genou D"),("Cheville G","Cheville D")]):
-            fig, axes = plt.subplots(1,2,figsize=(12,4))
-            for j, joint in enumerate(joint_pair):
+        
+        # Courbes superposées gauche/droite
+        for joint_pair, color_pair in zip(
+            [("Hanche G","Hanche D"),("Genou G","Genou D"),("Cheville G","Cheville D")],
+            [('red','blue'),('red','blue'),('red','blue')]
+        ):
+            fig, ax = plt.subplots(figsize=(10,4))
+            for joint, color in zip(joint_pair, color_pair):
                 angles_smooth = gaussian_filter1d(results[joint], sigma=smoothing)
-                axes[j].plot(angles_smooth, lw=2)
-                axes[j].set_title(joint)
-                axes[j].set_xlabel("Frame")
-                axes[j].set_ylabel("Angle (°)")
-            plt.tight_layout()
-            col = col1 if i%2==0 else col2
-            col.pyplot(fig)
+                ax.plot(angles_smooth, lw=2, color=color, label=joint)
+                # résumé
+                summary_table.append([joint, f"{np.min(results[joint]):.1f}", f"{np.mean(results[joint]):.1f}", f"{np.max(results[joint]):.1f}"])
+            ax.set_title(f"{joint_pair[0].split()[0]} : Flexion/Extension Gauche/Droite")
+            ax.set_xlabel("Frame")
+            ax.set_ylabel("Angle (°)")
+            ax.legend()
+            st.pyplot(fig)
             img_path = os.path.join(tempfile.gettempdir(), f"{joint_pair[0]}_{joint_pair[1]}.png")
             fig.savefig(img_path, bbox_inches='tight')
             plt.close(fig)
             joint_imgs[f"{joint_pair[0]} & {joint_pair[1]}"] = img_path
-            # résumé
-            for joint in joint_pair:
-                summary_table.append([joint, f"{np.min(results[joint]):.1f}", f"{np.mean(results[joint]):.1f}", f"{np.max(results[joint]):.1f}"])
+        
         # Dos
         angles_smooth = gaussian_filter1d(results["Dos"], sigma=smoothing)
         fig, ax = plt.subplots(figsize=(10,4))
