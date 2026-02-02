@@ -1,28 +1,33 @@
 import streamlit as st
 import tensorflow as tf
 import tensorflow_hub as hub
-import cv2, os, tempfile
+import cv2
 import numpy as np
 import matplotlib.pyplot as plt
-from scipy.signal import butter, filtfilt
+import tempfile, os
 from datetime import datetime
-
+from scipy.signal import butter, filtfilt, find_peaks
 from reportlab.platypus import (
-    SimpleDocTemplate, Paragraph, Spacer, Image as PDFImage
+    SimpleDocTemplate, Paragraph, Image as PDFImage,
+    Spacer, Table, TableStyle
 )
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import cm
+from reportlab.lib import colors
 
-# =========================
-# CONFIG STREAMLIT
-# =========================
-st.set_page_config(page_title="GaitScan Pro", layout="wide")
-st.title("🏃 GaitScan Pro – Analyse de la marche")
+# ======================================================
+# CONFIG
+# ======================================================
+st.set_page_config("GaitScan Pro", layout="wide")
+st.title("🏃 GaitScan Pro – Analyse Cinématique")
+st.subheader("Analyse 2D – marche / course")
 
-# =========================
+FPS = 30
+
+# ======================================================
 # MOVENET
-# =========================
+# ======================================================
 @st.cache_resource
 def load_movenet():
     return hub.load("https://tfhub.dev/google/movenet/singlepose/lightning/4")
@@ -31,46 +36,46 @@ movenet = load_movenet()
 
 def detect_pose(frame):
     img = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-    img = tf.image.resize_with_pad(tf.expand_dims(img, axis=0), 192, 192)
-    input_img = tf.cast(img, tf.int32)
-    outputs = movenet.signatures["serving_default"](input_img)
-    return outputs["output_0"].numpy()[0, 0, :, :]
+    img = tf.image.resize_with_pad(img[None], 192, 192)
+    out = movenet.signatures["serving_default"](tf.cast(img, tf.int32))
+    return out["output_0"].numpy()[0, 0]
 
-# =========================
+# ======================================================
 # ARTICULATIONS
-# =========================
+# ======================================================
 JOINTS = {
     "Epaule G": 5, "Epaule D": 6,
     "Hanche G": 11, "Hanche D": 12,
     "Genou G": 13, "Genou D": 14,
-    "Cheville G": 15, "Cheville D": 16
+    "Cheville G": 15, "Cheville D": 16,
 }
 
 def angle(a, b, c):
-    ba = a - b
-    bc = c - b
+    ba, bc = a-b, c-b
     cosang = np.dot(ba, bc) / (np.linalg.norm(ba)*np.linalg.norm(bc)+1e-6)
     return np.degrees(np.arccos(np.clip(cosang, -1, 1)))
 
-# =========================
-# FILTRE BAND-PASS
-# =========================
-def bandpass(signal, fs=30, low=0.3, high=6):
+# ======================================================
+# BAND-PASS DOUX
+# ======================================================
+def bandpass(signal, level, fs=FPS):
+    low = 0.3 + level*0.02
+    high = 6.0 - level*0.25
+    high = max(high, low + 0.4)
+
     b, a = butter(2, [low/(fs/2), high/(fs/2)], btype="band")
     return filtfilt(b, a, signal)
 
-# =========================
-# TRAITEMENT VIDÉO
-# =========================
+# ======================================================
+# TRAITEMENT VIDEO
+# ======================================================
 def process_video(path, side):
     cap = cv2.VideoCapture(path)
-    frames, heel_y = [], []
 
-    results = {k: [] for k in [
-        "Hanche", "Genou", "Cheville", "Pelvis", "Dos"
+    data = {k: [] for k in [
+        "Hanche","Genou","Cheville","Pelvis","Dos"
     ]}
-
-    side_suffix = "D" if side == "Droit" else "G"
+    heel_y, frames = [], []
 
     while cap.isOpened():
         ret, frame = cap.read()
@@ -80,125 +85,154 @@ def process_video(path, side):
         kp = detect_pose(frame)
         frames.append(frame.copy())
 
-        hip = kp[JOINTS[f"Hanche {side_suffix}"], :2]
-        knee = kp[JOINTS[f"Genou {side_suffix}"], :2]
-        ankle = kp[JOINTS[f"Cheville {side_suffix}"], :2]
-        shoulder = kp[JOINTS[f"Epaule {side_suffix}"], :2]
+        G = "G" if side == "Gauche" else "D"
 
-        results["Genou"].append(angle(hip, knee, ankle))
-        results["Hanche"].append(angle(shoulder, hip, knee))
-        results["Cheville"].append(angle(knee, ankle, ankle + np.array([0, 1])))
+        H = kp[JOINTS[f"Hanche {G}"], :2]
+        K = kp[JOINTS[f"Genou {G}"], :2]
+        A = kp[JOINTS[f"Cheville {G}"], :2]
+        S = kp[JOINTS[f"Epaule {G}"], :2]
 
-        pelvis_angle = np.degrees(
-            np.arctan2(
-                kp[JOINTS["Hanche D"], 1] - kp[JOINTS["Hanche G"], 1],
-                kp[JOINTS["Hanche D"], 0] - kp[JOINTS["Hanche G"], 0]
-            )
-        )
-        results["Pelvis"].append(pelvis_angle)
+        data["Hanche"].append(angle(S, H, K))
+        data["Genou"].append(angle(H, K, A))
+        data["Cheville"].append(angle(K, A, A+np.array([0,1])))
 
-        spine_mid = (kp[JOINTS["Epaule G"], :2] + kp[JOINTS["Epaule D"], :2]) / 2
-        hip_mid = (kp[JOINTS["Hanche G"], :2] + kp[JOINTS["Hanche D"], :2]) / 2
-        results["Dos"].append(angle(spine_mid, hip_mid, hip_mid + np.array([0, -1])))
+        pelvis = kp[JOINTS["Hanche D"], :2] - kp[JOINTS["Hanche G"], :2]
+        data["Pelvis"].append(np.degrees(np.arctan2(pelvis[1], pelvis[0])))
 
-        heel_y.append(ankle[1])
+        mid_hip = (kp[11,:2]+kp[12,:2])/2
+        mid_sh = (kp[5,:2]+kp[6,:2])/2
+        data["Dos"].append(angle(mid_sh, mid_hip, mid_hip+np.array([0,-1])))
+
+        heel_y.append(A[1])
 
     cap.release()
-    return results, heel_y, frames
+    return data, heel_y, frames
 
-# =========================
-# DÉTECTION CYCLE TALON
-# =========================
+# ======================================================
+# CYCLE TALON → TALON
+# ======================================================
 def detect_cycle(heel_y):
-    signal = bandpass(np.array(heel_y))
-    mins = np.where((signal[1:-1] < signal[:-2]) & (signal[1:-1] < signal[2:]))[0] + 1
-    if len(mins) >= 2:
-        return mins[0], mins[1]
-    return None, None
+    inv = -np.array(heel_y)
+    peaks, _ = find_peaks(inv, distance=FPS//2, prominence=np.std(inv)*0.3)
+    if len(peaks) >= 2:
+        return peaks[0], peaks[1]
+    return 0, len(heel_y)-1
 
-# =========================
-# COURBES NORMALES
-# =========================
-def norm_curve(kind, n):
-    x = np.linspace(0, 1, n)
-    if kind == "Genou":
-        return 10 + 50 * np.sin(np.pi * x)
-    if kind == "Hanche":
-        return 30 - 40 * x
-    if kind == "Cheville":
-        return -10 + 25 * np.sin(2 * np.pi * x)
-    if kind == "Pelvis":
-        return 5 * np.sin(2 * np.pi * x)
-    if kind == "Dos":
-        return 5 + 5 * np.sin(2 * np.pi * x)
+# ======================================================
+# IMAGE STABLE (MILIEU DE CYCLE)
+# ======================================================
+def extract_keyframe(frames, start, end):
+    idx = (start + end)//2
+    path = os.path.join(tempfile.gettempdir(), "keyframe.png")
+    cv2.imwrite(path, frames[idx])
+    return path
 
-# =========================
+# ======================================================
+# NORMES ARTICULAIRES (PHYSIO)
+# ======================================================
+def norm_curve(joint, n):
+    x = np.linspace(0,100,n)
+    if joint=="Genou":
+        y = np.interp(x,[0,15,40,60,80,100],[5,15,5,40,60,5])
+    elif joint=="Hanche":
+        y = np.interp(x,[0,30,60,100],[30,0,-10,30])
+    elif joint=="Cheville":
+        y = np.interp(x,[0,10,50,70,100],[0,-5,10,-15,0])
+    else:
+        y = np.zeros(n)
+    return y
+
+# ======================================================
 # PDF
-# =========================
-def generate_pdf(nom, prenom, image_path, figs):
-    pdf_path = os.path.join(tempfile.gettempdir(), "rapport_gaitscan.pdf")
-    doc = SimpleDocTemplate(pdf_path, pagesize=A4)
+# ======================================================
+def export_pdf(info, figs, table):
+    path = os.path.join(tempfile.gettempdir(), "rapport.pdf")
+    doc = SimpleDocTemplate(path, pagesize=A4)
     styles = getSampleStyleSheet()
-    elems = []
+    story = [
+        Paragraph("<b>Analyse Cinématique</b>", styles["Title"]),
+        Paragraph(f"Patient : {info['nom']} {info['prenom']}", styles["Normal"]),
+        Paragraph(datetime.now().strftime("%d/%m/%Y"), styles["Normal"]),
+        Spacer(1,1*cm),
+        PDFImage(info["image"], width=15*cm, height=8*cm),
+        Spacer(1,0.5*cm)
+    ]
 
-    elems.append(Paragraph("<b>Analyse de la marche</b>", styles["Title"]))
-    elems.append(Paragraph(f"{prenom} {nom}", styles["Normal"]))
-    elems.append(Paragraph(datetime.now().strftime("%d/%m/%Y"), styles["Normal"]))
-    elems.append(Spacer(1, 12))
+    for title, img in figs.items():
+        story += [
+            Paragraph(f"<b>{title}</b>", styles["Heading2"]),
+            PDFImage(img, width=16*cm, height=6*cm),
+            Spacer(1,0.4*cm)
+        ]
 
-    if image_path:
-        elems.append(Paragraph("Posture représentative (milieu du cycle)", styles["Heading2"]))
-        elems.append(PDFImage(image_path, width=14*cm, height=7*cm))
-        elems.append(Spacer(1, 12))
+    table = Table([["Articulation","Min","Moy","Max"]]+table)
+    table.setStyle(TableStyle([
+        ("GRID",(0,0),(-1,-1),1,colors.black),
+        ("BACKGROUND",(0,0),(-1,0),colors.lightgrey)
+    ]))
+    story.append(table)
+    doc.build(story)
+    return path
 
-    for f in figs:
-        elems.append(PDFImage(f, width=15*cm, height=6*cm))
-        elems.append(Spacer(1, 12))
-
-    doc.build(elems)
-    return pdf_path
-
-# =========================
+# ======================================================
 # INTERFACE
-# =========================
+# ======================================================
 with st.sidebar:
-    nom = st.text_input("Nom", "DURAND")
-    prenom = st.text_input("Prénom", "Jean")
-    side = st.selectbox("Côté filmé", ["Droit", "Gauche"])
-    video = st.file_uploader("Vidéo", ["mp4", "avi", "mov"])
+    nom = st.text_input("Nom","DURAND")
+    prenom = st.text_input("Prénom","Jean")
+    side = st.selectbox("Côté filmé",["Gauche","Droit"])
+    smooth = st.slider("Lissage (band-pass)",0,10,3)
+    src = st.radio("Source",["Vidéo","Caméra"])
 
-if video and st.button("Lancer l'analyse"):
-    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
-    tmp.write(video.read())
-    tmp.close()
+video = st.file_uploader("Vidéo",["mp4","avi","mov"]) if src=="Vidéo" else st.camera_input("Caméra")
 
-    results, heel_y, frames = process_video(tmp.name, side)
-    start, end = detect_cycle(heel_y)
+# ======================================================
+# ANALYSE
+# ======================================================
+if video and st.button("▶ Lancer l'analyse"):
+    with st.spinner("Analyse en cours..."):
+        tmp = tempfile.NamedTemporaryFile(delete=False)
+        tmp.write(video.read())
+        tmp.close()
 
-    pdf_figs = []
+        data, heel_y, frames = process_video(tmp.name, side)
+        os.unlink(tmp.name)
 
-    if start and end:
-        mid = (start + end) // 2
-        img_path = os.path.join(tempfile.gettempdir(), "posture.png")
-        cv2.imwrite(img_path, frames[mid])
-        st.image(img_path, caption="Milieu du cycle")
+        heel_f = bandpass(np.array(heel_y), smooth)
+        c0, c1 = detect_cycle(heel_f)
+        key_img = extract_keyframe(frames, c0, c1)
 
-    for joint, values in results.items():
-        filt = bandpass(np.array(values))
-        fig, ax = plt.subplots()
-        ax.plot(filt, label="Mesure")
-        ax.plot(norm_curve(joint, len(filt)), "--", label="Norme")
-        if start and end:
-            ax.axvspan(start, end, color="yellow", alpha=0.3)
-        ax.set_title(joint)
-        ax.legend()
-        st.pyplot(fig)
+        figs, table = {}, []
 
-        path = os.path.join(tempfile.gettempdir(), f"{joint}.png")
-        fig.savefig(path, dpi=200)
-        plt.close(fig)
-        pdf_figs.append(path)
+        for joint in ["Hanche","Genou","Cheville"]:
+            sig = bandpass(np.array(data[joint]), smooth)
+            nrm = norm_curve(joint, len(sig))
 
-    pdf = generate_pdf(nom, prenom, img_path if start else None, pdf_figs)
-    with open(pdf, "rb") as f:
-        st.download_button("📄 Télécharger le PDF", f, "rapport.pdf")
+            fig, ax = plt.subplots(figsize=(8,4))
+            ax.plot(sig, lw=2, label="Réel")
+            ax.plot(nrm, lw=1.5, linestyle="--", label="Norme")
+            ax.axvspan(c0, c1, color="orange", alpha=0.2)
+            ax.set_title(joint)
+            ax.legend()
+            st.pyplot(fig)
+
+            img = os.path.join(tempfile.gettempdir(), f"{joint}.png")
+            fig.savefig(img, bbox_inches="tight")
+            plt.close(fig)
+            figs[joint] = img
+
+            table.append([
+                joint,
+                f"{sig.min():.1f}",
+                f"{sig.mean():.1f}",
+                f"{sig.max():.1f}"
+            ])
+
+        pdf = export_pdf(
+            {"nom":nom,"prenom":prenom,"image":key_img},
+            figs,
+            table
+        )
+
+        with open(pdf,"rb") as f:
+            st.download_button("📄 Télécharger le PDF", f, "rapport_gaitscan.pdf")
