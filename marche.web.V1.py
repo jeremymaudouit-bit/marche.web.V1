@@ -136,7 +136,52 @@ def norm_curve(joint,n):
     return np.zeros(n)
 
 # ==============================
-# INTERFACE
+# PDF EXPORT
+# ==============================
+def export_pdf(patient, keyframe, figures, table_data):
+    path = os.path.join(tempfile.gettempdir(), "rapport_gaitscan.pdf")
+    doc = SimpleDocTemplate(
+        path, pagesize=A4, rightMargin=2*cm,
+        leftMargin=2*cm, topMargin=2*cm, bottomMargin=2*cm
+    )
+
+    styles = getSampleStyleSheet()
+    story = []
+
+    story.append(Paragraph("<b>GaitScan Pro – Analyse Cinématique</b>", styles["Title"]))
+    story.append(Spacer(1,0.3*cm))
+    story.append(Paragraph(
+        f"<b>Patient :</b> {patient['nom']} {patient['prenom']}<br/>"
+        f"<b>Date :</b> {datetime.now().strftime('%d/%m/%Y')}", styles["Normal"]
+    ))
+    story.append(Spacer(1,0.5*cm))
+
+    story.append(Paragraph("<b>Image représentative du cycle</b>", styles["Heading2"]))
+    story.append(PDFImage(keyframe, width=16*cm, height=8*cm))
+    story.append(Spacer(1,0.6*cm))
+
+    story.append(Paragraph("<b>Analyse articulaire</b>", styles["Heading2"]))
+    story.append(Spacer(1,0.3*cm))
+    for joint, img_path in figures.items():
+        story.append(Paragraph(f"<b>{joint}</b>", styles["Heading3"]))
+        story.append(PDFImage(img_path, width=16*cm, height=6*cm))
+        story.append(Spacer(1,0.4*cm))
+
+    story.append(Spacer(1,0.5*cm))
+    story.append(Paragraph("<b>Synthèse des angles (°)</b>", styles["Heading2"]))
+    table = Table([["Articulation","Min","Moyenne","Max"]]+table_data,
+                  colWidths=[5*cm,3*cm,3*cm,3*cm])
+    table.setStyle(TableStyle([
+        ("GRID",(0,0),(-1,-1),1,colors.black),
+        ("BACKGROUND",(0,0),(-1,0),colors.lightgrey),
+        ("ALIGN",(1,1),(-1,-1),"CENTER")
+    ]))
+    story.append(table)
+    doc.build(story)
+    return path
+
+# ==============================
+# STREAMLIT INTERFACE
 # ==============================
 with st.sidebar:
     nom = st.text_input("Nom","DURAND")
@@ -167,7 +212,6 @@ if video and st.button("▶ Lancer l'analyse"):
 
     for joint in ["Hanche","Genou","Cheville"]:
         fig,(ax1,ax2) = plt.subplots(1,2,figsize=(12,4),gridspec_kw={"width_ratios":[2,1]})
-
         g = bandpass(np.array(data[f"{joint} G"]), smooth)
         d = bandpass(np.array(data[f"{joint} D"]), smooth)
         n = norm_curve(joint,len(g))
@@ -182,17 +226,25 @@ if video and st.button("▶ Lancer l'analyse"):
         ax2.set_title("Norme")
 
         st.pyplot(fig)
-
         img = os.path.join(tempfile.gettempdir(),f"{joint}.png")
         fig.savefig(img,bbox_inches="tight")
         plt.close(fig)
         figs[joint]=img
 
-        table.append([joint,
-            f"{min(g.min(),d.min()):.1f}",
-            f"{(g.mean()+d.mean())/2:.1f}",
-            f"{max(g.max(),d.max()):.1f}"
-        ])
+        table.append([joint,f"{min(g.min(),d.min()):.1f}",f"{(g.mean()+d.mean())/2:.1f}",f"{max(g.max(),d.max()):.1f}"])
 
-    # PDF (inchangé)
-    # → je peux te le réinjecter tel quel au prochain message
+    # PDF
+    pdf_path = export_pdf(
+        patient={"nom": nom, "prenom": prenom},
+        keyframe=key_img,
+        figures=figs,
+        table_data=table
+    )
+
+    with open(pdf_path, "rb") as f:
+        st.download_button(
+            "📄 Télécharger le rapport PDF",
+            f,
+            file_name=f"GaitScan_{nom}_{prenom}.pdf",
+            mime="application/pdf"
+        )
