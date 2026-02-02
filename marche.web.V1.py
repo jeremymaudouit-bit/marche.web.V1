@@ -6,7 +6,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from datetime import datetime
 
-from scipy.signal import savgol_filter
+from scipy.signal import butter, filtfilt
 from scipy.ndimage import gaussian_filter1d
 
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Image as PDFImage, Spacer, Table, TableStyle
@@ -62,25 +62,23 @@ def angle(a, b, c):
     return np.degrees(np.arccos(np.clip(cosang, -1, 1)))
 
 # =====================================================
-# LISSAGE CLINIQUE DOUX
+# FILTRE BANDE-PASSANTE
 # =====================================================
-def smooth_signal(signal, slider_value):
+def bandpass_filter(signal, slider_value):
     signal = np.array(signal)
-    if slider_value == 0 or len(signal) < 7:
+    if slider_value == 0 or len(signal) < 5:
         return signal
     
     # Transformation douce du slider
-    effective_strength = np.sqrt(slider_value)  # racine carrée = lissage progressif
+    strength = np.sqrt(slider_value)
     
-    # Fenêtre du Savitzky-Golay
-    base = max(len(signal)//10, 7)
-    win = min(int(base * (effective_strength + 1)), len(signal)//2)
-    if win % 2 == 0:
-        win -= 1
-    if win < 7:
-        win = 7
+    # Définir fréquence normalisée (0-1, 1=Nyquist)
+    low = 0.01  # passe-haut fixe
+    high = min(0.5, 0.05*strength + 0.1)  # passe-bas varie avec slider
 
-    return savgol_filter(signal, window_length=win, polyorder=3)
+    b, a = butter(N=2, Wn=[low, high], btype='bandpass')
+    filtered = filtfilt(b, a, signal)
+    return filtered
 
 # =====================================================
 # MODÈLES NORMAUX
@@ -184,7 +182,7 @@ with st.sidebar:
     cam_pos = st.selectbox("Position",["Devant","Côté gauche","Côté droit"])
 
     st.subheader("⚙️ Paramètres")
-    smoothing = st.slider("Lissage", 0, 10, 2)
+    smoothing = st.slider("Filtrage", 0, 10, 2)
     show_norm = st.checkbox("Afficher norme",True)
 
 # =====================================================
@@ -221,7 +219,7 @@ if ready and st.button("▶ Lancer l'analyse"):
     for name,(jg,jd),norm in ARTICS:
         fig,(ax1,ax2)=plt.subplots(1,2,figsize=(10,4),gridspec_kw={'width_ratios':[2,1]})
         for j,c in zip([jg,jd],["red","blue"]):
-            s = smooth_signal(results[j],smoothing)
+            s = bandpass_filter(results[j],smoothing)
             ax1.plot(s,label=j,color=c)
             summary.append([j,f"{min(results[j]):.1f}",f"{np.mean(results[j]):.1f}",f"{max(results[j]):.1f}"])
         ax1.set_title(f"{name} réel")
@@ -240,7 +238,7 @@ if ready and st.button("▶ Lancer l'analyse"):
 
     # Pelvis
     fig, (ax1,ax2)=plt.subplots(1,2,figsize=(10,4),gridspec_kw={'width_ratios':[2,1]})
-    s = smooth_signal(results["Pelvis"], smoothing)
+    s = bandpass_filter(results["Pelvis"], smoothing)
     ax1.plot(s, color="purple", label="Pelvis réel")
     summary.append(["Pelvis",f"{min(results['Pelvis']):.1f}",f"{np.mean(results['Pelvis']):.1f}",f"{max(results['Pelvis']):.1f}"])
     ax1.set_title("Pelvis réel")
@@ -255,7 +253,7 @@ if ready and st.button("▶ Lancer l'analyse"):
 
     # Dos
     fig = plt.figure(figsize=(10,4))
-    s = smooth_signal(results["Dos"], smoothing)
+    s = bandpass_filter(results["Dos"], smoothing)
     plt.plot(s, color="green", label="Dos")
     summary.append(["Dos",f"{min(results['Dos']):.1f}",f"{np.mean(results['Dos']):.1f}",f"{max(results['Dos']):.1f}"])
     plt.title("Dos")
