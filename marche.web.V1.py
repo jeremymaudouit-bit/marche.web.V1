@@ -58,12 +58,15 @@ def angle(a, b, c):
 def process_video(video_file, frame_skip=2):
     cap = cv2.VideoCapture(video_file)
     results = {joint: [] for joint in ["Hanche G","Genou G","Cheville G","Hanche D","Genou D","Cheville D","Pelvis","Dos"]}
+    frames = []
     frame_idx = 0
     while cap.isOpened():
         ret, frame = cap.read()
         if not ret: break
         if frame_idx % frame_skip == 0:
             kp = detect_pose(frame)
+            # Stocker frame pour sélection image
+            frames.append((frame.copy(), kp))
             # Hanche
             results["Hanche G"].append(angle(kp[JOINTS_IDX["Epaule G"],:2], kp[JOINTS_IDX["Hanche G"],:2], kp[JOINTS_IDX["Genou G"],:2]))
             results["Hanche D"].append(angle(kp[JOINTS_IDX["Epaule D"],:2], kp[JOINTS_IDX["Hanche D"],:2], kp[JOINTS_IDX["Genou D"],:2]))
@@ -75,13 +78,37 @@ def process_video(video_file, frame_skip=2):
             results["Cheville D"].append(angle(kp[JOINTS_IDX["Genou D"],:2], kp[JOINTS_IDX["Cheville D"],:2], kp[JOINTS_IDX["Cheville D"],:2]+np.array([0,1])))
             # Dos
             results["Dos"].append(angle(kp[JOINTS_IDX["Epaule G"],:2], (kp[JOINTS_IDX["Hanche G"],:2]+kp[JOINTS_IDX["Hanche D"],:2])/2, kp[JOINTS_IDX["Epaule D"],:2]))
-            # Pelvis (bascule approximative selon ligne Hanche G-D)
+            # Pelvis
             pelvis_angle = np.degrees(np.arctan2(kp[JOINTS_IDX["Hanche D"],1]-kp[JOINTS_IDX["Hanche G"],1],
                                                 kp[JOINTS_IDX["Hanche D"],0]-kp[JOINTS_IDX["Hanche G"],0]))
             results["Pelvis"].append(pelvis_angle)
         frame_idx +=1
     cap.release()
-    return results
+    return results, frames
+
+# ==============================
+# SÉLECTION IMAGE REPRÉSENTATIVE
+# ==============================
+def select_best_frame(frames):
+    best_score = float('inf')
+    best_frame = None
+    for frame, kp in frames:
+        # Angle torse = angle entre épaules et milieu hanches
+        shoulder_mid = (kp[JOINTS_IDX["Epaule G"],:2] + kp[JOINTS_IDX["Epaule D"],:2]) / 2
+        hip_mid = (kp[JOINTS_IDX["Hanche G"],:2] + kp[JOINTS_IDX["Hanche D"],:2]) / 2
+        vertical = np.array([0, -1])
+        torso_vec = shoulder_mid - hip_mid
+        torso_vec = torso_vec / (np.linalg.norm(torso_vec)+1e-6)
+        angle_from_vertical = np.arccos(np.clip(np.dot(torso_vec, vertical), -1,1))
+        if angle_from_vertical < best_score:
+            best_score = angle_from_vertical
+            best_frame = frame
+    # Sauvegarder image
+    if best_frame is not None:
+        img_path = os.path.join(tempfile.gettempdir(), "keyframe.png")
+        cv2.imwrite(img_path, best_frame)
+        return img_path
+    return None
 
 # ==============================
 # MODÈLE NORMAL LISSE
@@ -126,10 +153,21 @@ def export_pdf(patient_info, joint_images, summary_table):
         Paragraph(f"Date : {datetime.now().strftime('%d/%m/%Y')}", styles['Normal']),
         Spacer(1,1*cm)
     ]
+    
+    # Image représentative
+    keyframe_path = patient_info.get("keyframe")
+    if keyframe_path:
+        story.append(Paragraph("<b>Image extraite de la vidéo</b>", styles['Heading2']))
+        story.append(PDFImage(keyframe_path, width=15*cm, height=8*cm))
+        story.append(Spacer(1,0.5*cm))
+    
+    # Graphiques articulations
     for joint, img_path in joint_images.items():
         story.append(Paragraph(f"<b>{joint}</b>", styles['Heading2']))
         story.append(PDFImage(img_path, width=15*cm, height=6*cm))
         story.append(Spacer(1,0.5*cm))
+    
+    # Tableau résumé
     story.append(Paragraph("<b>Résumé des angles (°)</b>", styles['Heading2']))
     table_data = [["Articulation", "Min", "Moyenne", "Max"]] + summary_table
     table = Table(table_data, hAlign='LEFT')
@@ -160,9 +198,7 @@ with st.sidebar:
     st.subheader("📐 Position caméra")
     cam_position = st.selectbox("Position de la caméra par rapport au patient", ["Devant", "Côté gauche", "Côté droit"])
 
-# ==============================
 # Ajustement G/D selon caméra
-# ==============================
 def adjust_joints_for_camera(cam_position, joints_idx):
     if cam_position in ["Côté gauche", "Côté droit"]:
         joints_idx = joints_idx.copy()
@@ -174,9 +210,7 @@ def adjust_joints_for_camera(cam_position, joints_idx):
 
 JOINTS_IDX = adjust_joints_for_camera(cam_position, JOINTS_IDX)
 
-# ==============================
-# ANALYSE
-# ==============================
+# Analyse
 video_ready = False
 if live_cam:
     cam_file = st.camera_input("🎥 Caméra")
@@ -190,8 +224,11 @@ if video_ready and st.button("⚙️ Lancer l'analyse"):
     with st.spinner("Analyse en cours..."):
         tfile = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
         tfile.write(video_file.read())
-        results = process_video(tfile.name, frame_skip=2)
+        results, frames = process_video(tfile.name, frame_skip=2)
         os.unlink(tfile.name)
+
+        # Sélection meilleure frame
+        keyframe_img = select_best_frame(frames)
 
         joint_imgs = {}
         summary_table = []
@@ -268,6 +305,7 @@ if video_ready and st.button("⚙️ Lancer l'analyse"):
         summary_table.append(["Dos", f"{np.min(results['Dos']):.1f}", f"{np.mean(results['Dos']):.1f}", f"{np.max(results['Dos']):.1f}"])
 
         # Export PDF
-        pdf_path = export_pdf({"nom": nom, "prenom": prenom}, joint_imgs, summary_table)
+        patient_info = {"nom": nom, "prenom": prenom, "keyframe": keyframe_img}
+        pdf_path = export_pdf(patient_info, joint_imgs, summary_table)
         with open(pdf_path, "rb") as f:
             st.download_button("📥 Télécharger le rapport PDF", f, f"Analyse_{nom}.pdf")
