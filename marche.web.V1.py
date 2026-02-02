@@ -84,27 +84,33 @@ def process_video(video_file, frame_skip=2):
     return results
 
 # ==============================
-# MODÈLE NORMAL RÉALISTE
+# MODÈLE NORMAL PAR INTERPOLATION DES POINTS CLÉS
 # ==============================
-def normal_pelvis(length=100):
-    """Bascule latérale du pelvis (~±5°)"""
-    t = np.linspace(0, 1, length)
-    return 5*np.sin(2*np.pi*t)
-
-def normal_hip(length=100):
-    """Flexion/extension hanche (~5° à 40°)"""
-    t = np.linspace(0, 1, length)
-    return 15 + 25*np.sin(2*np.pi*t - 0.2)
+def normal_ankle(length=100):
+    """Cheville : Dorsiflexion + / Plantarflexion -"""
+    cycle_percent = np.array([0, 10, 40, 60, 80, 100])
+    angles = np.array([0, -5, 10, -17.5, 0, 0])
+    x = np.linspace(0, 100, length)
+    return np.interp(x, cycle_percent, angles)
 
 def normal_knee(length=100):
-    """Flexion/extension genou (~0° à 60°)"""
-    t = np.linspace(0, 1, length)
-    return 60*np.sin(np.pi*t)**2
+    """Genou : Flexion +"""
+    cycle_percent = np.array([0, 15, 40, 60, 75, 100])
+    angles = np.array([5, 18, 3, 35, 60, 5])
+    x = np.linspace(0, 100, length)
+    return np.interp(x, cycle_percent, angles)
 
-def normal_ankle(length=100):
-    """Dorsiflexion/plantarflexion cheville (~-5° à 10°)"""
+def normal_hip(length=100):
+    """Hanche : Flexion + / Extension -"""
+    cycle_percent = np.array([0, 30, 55, 85, 100])
+    angles = np.array([30, 0, -15, 20, 30])
+    x = np.linspace(0, 100, length)
+    return np.interp(x, cycle_percent, angles)
+
+def normal_pelvis(length=100):
+    """Pelvis : simple balance latérale ±5°"""
     t = np.linspace(0, 1, length)
-    return -5 + 15*np.sin(2*np.pi*t + 0.1)
+    return 5*np.sin(2*np.pi*t)
 
 # ==============================
 # EXPORT PDF
@@ -171,14 +177,13 @@ if video_ready and st.button("⚙️ Lancer l'analyse"):
         joint_imgs = {}
         summary_table = []
 
-        # Articulations à traiter
         articulation_pairs = [("Hanche G","Hanche D"), ("Genou G","Genou D"), ("Cheville G","Cheville D")]
         normal_funcs = [normal_hip, normal_knee, normal_ankle]
 
         for (joint_pair, normal_func) in zip(articulation_pairs, normal_funcs):
             col1, col2 = st.columns(2)
 
-            # Colonne 1 : réelles
+            # Colonne 1 : réel
             fig, ax = plt.subplots(figsize=(6,4))
             for joint, color in zip(joint_pair, ['red','blue']):
                 angles_smooth = gaussian_filter1d(results[joint], sigma=smoothing)
@@ -211,23 +216,22 @@ if video_ready and st.button("⚙️ Lancer l'analyse"):
                 joint_imgs[f"{joint_pair[0]} & {joint_pair[1]} Normal"] = img_path2
 
         # Pelvis
-        if "Pelvis" in results:
-            angles_smooth = gaussian_filter1d(results["Pelvis"], sigma=smoothing)
-            fig, ax = plt.subplots(figsize=(10,4))
-            ax.plot(angles_smooth, lw=2, color='purple', label="Pelvis réel")
-            if show_normal:
-                normal_curve = normal_pelvis(len(angles_smooth))
-                ax.plot(normal_curve, lw=2, color='green', linestyle='--', label="Pelvis modèle")
-            ax.set_title("Bascule Pelvis")
-            ax.set_xlabel("Frame")
-            ax.set_ylabel("Angle (°)")
-            ax.legend()
-            st.pyplot(fig)
-            img_path = os.path.join(tempfile.gettempdir(), "Pelvis.png")
-            fig.savefig(img_path, bbox_inches='tight')
-            plt.close(fig)
-            joint_imgs["Pelvis"] = img_path
-            summary_table.append(["Pelvis", f"{np.min(results['Pelvis']):.1f}", f"{np.mean(results['Pelvis']):.1f}", f"{np.max(results['Pelvis']):.1f}"])
+        angles_smooth = gaussian_filter1d(results["Pelvis"], sigma=smoothing)
+        fig, ax = plt.subplots(figsize=(10,4))
+        ax.plot(angles_smooth, lw=2, color='purple', label="Pelvis réel")
+        if show_normal:
+            normal_curve = normal_pelvis(len(angles_smooth))
+            ax.plot(normal_curve, lw=2, color='green', linestyle='--', label="Pelvis modèle")
+        ax.set_title("Bascule Pelvis")
+        ax.set_xlabel("Frame")
+        ax.set_ylabel("Angle (°)")
+        ax.legend()
+        st.pyplot(fig)
+        img_path = os.path.join(tempfile.gettempdir(), "Pelvis.png")
+        fig.savefig(img_path, bbox_inches='tight')
+        plt.close(fig)
+        joint_imgs["Pelvis"] = img_path
+        summary_table.append(["Pelvis", f"{np.min(results['Pelvis']):.1f}", f"{np.mean(results['Pelvis']):.1f}", f"{np.max(results['Pelvis']):.1f}"])
 
         # Dos
         angles_smooth = gaussian_filter1d(results["Dos"], sigma=smoothing)
