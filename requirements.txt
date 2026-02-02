@@ -6,3 +6,4 @@ opencv-python-headless>=4.7.0
 numpy>=1.24.0
 matplotlib>=3.7.0
 reportlab>=3.6.14
+scipy>=1.11.0
