@@ -87,7 +87,6 @@ def process_video(video_file, frame_skip=2):
 # MODÈLE NORMAL LISSE
 # ==============================
 def normal_ankle(length=100, sigma=2):
-    """Cheville : interpolation + lissage"""
     cycle_percent = np.array([0, 10, 40, 60, 80, 100])
     angles = np.array([0, -5, 10, -17.5, 0, 0])
     x = np.linspace(0, 100, length)
@@ -95,7 +94,6 @@ def normal_ankle(length=100, sigma=2):
     return gaussian_filter1d(curve, sigma=sigma)
 
 def normal_knee(length=100, sigma=2):
-    """Genou : interpolation + lissage"""
     cycle_percent = np.array([0, 15, 40, 60, 75, 100])
     angles = np.array([5, 18, 3, 35, 60, 5])
     x = np.linspace(0, 100, length)
@@ -103,7 +101,6 @@ def normal_knee(length=100, sigma=2):
     return gaussian_filter1d(curve, sigma=sigma)
 
 def normal_hip(length=100, sigma=2):
-    """Hanche : interpolation + lissage"""
     cycle_percent = np.array([0, 30, 55, 85, 100])
     angles = np.array([30, 0, -15, 20, 30])
     x = np.linspace(0, 100, length)
@@ -111,7 +108,6 @@ def normal_hip(length=100, sigma=2):
     return gaussian_filter1d(curve, sigma=sigma)
 
 def normal_pelvis(length=100, sigma=2):
-    """Pelvis : balance latérale lissée"""
     t = np.linspace(0, 1, length)
     curve = 5*np.sin(2*np.pi*t)
     return gaussian_filter1d(curve, sigma=sigma)
@@ -152,12 +148,32 @@ with st.sidebar:
     st.header("👤 Patient")
     nom = st.text_input("Nom", "DURAND")
     prenom = st.text_input("Prénom", "Jean")
+    
     st.subheader("📹 Source")
     video_file = st.file_uploader("Charger une vidéo", type=["mp4","mov","avi"])
     live_cam = st.checkbox("Ou utiliser la caméra live")
+    
     st.subheader("⚙️ Paramètres")
     smoothing = st.slider("Lissage des courbes", 0, 10, 2)
     show_normal = st.checkbox("Afficher modèle normal à côté", value=True)
+
+    st.subheader("📐 Position caméra")
+    cam_position = st.selectbox("Position de la caméra par rapport au patient", ["Devant", "Côté gauche", "Côté droit"])
+
+# ==============================
+# Ajustement G/D selon caméra
+# ==============================
+def adjust_joints_for_camera(cam_position, joints_idx):
+    if cam_position in ["Côté gauche", "Côté droit"]:
+        # Inverse G/D
+        joints_idx = joints_idx.copy()
+        joints_idx["Hanche G"], joints_idx["Hanche D"] = joints_idx["Hanche D"], joints_idx["Hanche G"]
+        joints_idx["Genou G"], joints_idx["Genou D"] = joints_idx["Genou D"], joints_idx["Genou G"]
+        joints_idx["Cheville G"], joints_idx["Cheville D"] = joints_idx["Cheville D"], joints_idx["Cheville G"]
+        joints_idx["Epaule G"], joints_idx["Epaule D"] = joints_idx["Epaule D"], joints_idx["Epaule G"]
+    return joints_idx
+
+JOINTS_IDX = adjust_joints_for_camera(cam_position, JOINTS_IDX)
 
 # ==============================
 # ANALYSE
