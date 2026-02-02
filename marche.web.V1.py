@@ -51,9 +51,9 @@ BASE_JOINTS = {
 def adjust_joints(cam_position, joints):
     j = joints.copy()
     if cam_position in ["Côté gauche", "Côté droit"]:
-        for a, b in [("G","D")]:
-            for k in ["Epaule","Hanche","Genou","Cheville"]:
-                j[f"{k} G"], j[f"{k} D"] = j[f"{k} D"], j[f"{k} G"]
+        # Inverser gauche/droite
+        for k in ["Epaule","Hanche","Genou","Cheville"]:
+            j[f"{k} G"], j[f"{k} D"] = j[f"{k} D"], j[f"{k} G"]
     return j
 
 def angle(a, b, c):
@@ -62,21 +62,29 @@ def angle(a, b, c):
     return np.degrees(np.arccos(np.clip(cosang, -1, 1)))
 
 # =====================================================
-# LISSAGE CLINIQUE (CORRIGÉ)
+# LISSAGE CLINIQUE PARAMÉTRABLE
 # =====================================================
 def smooth_signal(signal, strength):
+    """
+    Lissage Savitzky-Golay paramétrable.
+    strength = 0 → brut, 10 → lissage très fort
+    """
     signal = np.array(signal)
     if strength == 0 or len(signal) < 7:
         return signal
-    win = min(len(signal)//3, 21)
+    
+    # Fenêtre proportionnelle à strength et longueur du signal
+    base = max(len(signal)//10, 7)
+    win = min(base*(strength+1), len(signal)//2)
     if win % 2 == 0:
         win -= 1
     if win < 7:
         win = 7
+
     return savgol_filter(signal, window_length=win, polyorder=3)
 
 # =====================================================
-# MODELES NORMAUX
+# MODÈLES NORMAUX
 # =====================================================
 def normal_curve(points, values, length):
     x = np.linspace(0, 100, length)
@@ -101,6 +109,7 @@ def process_video(path, joints):
         ret, frame = cap.read()
         if not ret: break
         kp = detect_pose(frame)
+        # Sélection frame représentative
         score = np.mean(kp[:,2])
         if score > best_score:
             best_score, best_frame = score, frame.copy()
@@ -176,7 +185,7 @@ with st.sidebar:
     cam_pos = st.selectbox("Position",["Devant","Côté gauche","Côté droit"])
 
     st.subheader("⚙️ Paramètres")
-    smoothing = st.slider("Lissage",0,5,2)
+    smoothing = st.slider("Lissage", 0, 10, 2)
     show_norm = st.checkbox("Afficher norme",True)
 
 # =====================================================
@@ -220,7 +229,8 @@ if ready and st.button("▶ Lancer l'analyse"):
         ax1.legend()
 
         if show_norm:
-            ax2.plot(norm(len(s)),color="green")
+            l = len(s)
+            ax2.plot(norm(l),color="green")
             ax2.set_title("Norme")
 
         st.pyplot(fig)
@@ -229,6 +239,37 @@ if ready and st.button("▶ Lancer l'analyse"):
         images[name]=p
         plt.close(fig)
 
+    # Pelvis
+    fig, (ax1,ax2)=plt.subplots(1,2,figsize=(10,4),gridspec_kw={'width_ratios':[2,1]})
+    s = smooth_signal(results["Pelvis"], smoothing)
+    ax1.plot(s, color="purple", label="Pelvis réel")
+    summary.append(["Pelvis",f"{min(results['Pelvis']):.1f}",f"{np.mean(results['Pelvis']):.1f}",f"{max(results['Pelvis']):.1f}"])
+    ax1.set_title("Pelvis réel")
+    if show_norm:
+        ax2.plot(normal_pelvis(len(s)), color="green")
+        ax2.set_title("Norme")
+    st.pyplot(fig)
+    p=os.path.join(tempfile.gettempdir(),"Pelvis.png")
+    fig.savefig(p,bbox_inches="tight")
+    images["Pelvis"]=p
+    plt.close(fig)
+
+    # Dos
+    fig = plt.figure(figsize=(10,4))
+    s = smooth_signal(results["Dos"], smoothing)
+    plt.plot(s, color="green", label="Dos")
+    summary.append(["Dos",f"{min(results['Dos']):.1f}",f"{np.mean(results['Dos']):.1f}",f"{max(results['Dos']):.1f}"])
+    plt.title("Dos")
+    plt.xlabel("Frame")
+    plt.ylabel("Angle (°)")
+    plt.legend()
+    st.pyplot(fig)
+    p=os.path.join(tempfile.gettempdir(),"Dos.png")
+    fig.savefig(p,bbox_inches="tight")
+    images["Dos"]=p
+    plt.close(fig)
+
+    # PDF
     pdf = export_pdf({"nom":nom,"prenom":prenom},images,summary,best_img_path)
     with open(pdf,"rb") as f:
         st.download_button("📥 Télécharger le PDF",f,"rapport_gaitscan.pdf")
