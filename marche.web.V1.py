@@ -152,7 +152,8 @@ def export_pdf(patient, keyframe, figures, table_data):
     story.append(Spacer(1,0.3*cm))
     story.append(Paragraph(
         f"<b>Patient :</b> {patient['nom']} {patient['prenom']}<br/>"
-        f"<b>Date :</b> {datetime.now().strftime('%d/%m/%Y')}", styles["Normal"]
+        f"<b>Date :</b> {datetime.now().strftime('%d/%m/%Y')}<br/>"
+        f"<b>Caméra :</b> {patient.get('camera','N/A')}", styles["Normal"]
     ))
     story.append(Spacer(1,0.5*cm))
 
@@ -168,7 +169,7 @@ def export_pdf(patient, keyframe, figures, table_data):
         story.append(Spacer(1,0.4*cm))
 
     story.append(Spacer(1,0.5*cm))
-    story.append(Paragraph("<b>Synthèse des angles (°)</b>", styles["Heading2"]))
+    story.append(Paragraph("<b>Synthèse des angles (°) – Gauche / Droite</b>", styles["Heading2"]))
     table = Table([["Articulation","Min","Moyenne","Max"]]+table_data,
                   colWidths=[5*cm,3*cm,3*cm,3*cm])
     table.setStyle(TableStyle([
@@ -188,6 +189,7 @@ with st.sidebar:
     prenom = st.text_input("Prénom","Jean")
     smooth = st.slider("Lissage band-pass",0,10,3)
     src = st.radio("Source",["Vidéo","Caméra"])
+    camera_pos = st.selectbox("Position de la caméra", ["Devant", "Droite", "Gauche"])
 
 video = st.file_uploader("Vidéo",["mp4","avi","mov"]) if src=="Vidéo" else st.camera_input("Caméra")
 
@@ -208,7 +210,7 @@ if video and st.button("▶ Lancer l'analyse"):
     key_img = os.path.join(tempfile.gettempdir(),"keyframe.png")
     cv2.imwrite(key_img, frames[(c0+c1)//2])
 
-    figs, table = {}, []
+    figs, table_data = {}, []
 
     for joint in ["Hanche","Genou","Cheville"]:
         fig,(ax1,ax2) = plt.subplots(1,2,figsize=(12,4),gridspec_kw={"width_ratios":[2,1]})
@@ -231,14 +233,16 @@ if video and st.button("▶ Lancer l'analyse"):
         plt.close(fig)
         figs[joint]=img
 
-        table.append([joint,f"{min(g.min(),d.min()):.1f}",f"{(g.mean()+d.mean())/2:.1f}",f"{max(g.max(),d.max()):.1f}"])
+        # Tableau détaillé par côté
+        table_data.append([joint+" Gauche", f"{g.min():.1f}", f"{g.mean():.1f}", f"{g.max():.1f}"])
+        table_data.append([joint+" Droite", f"{d.min():.1f}", f"{d.mean():.1f}", f"{d.max():.1f}"])
 
     # PDF
     pdf_path = export_pdf(
-        patient={"nom": nom, "prenom": prenom},
+        patient={"nom": nom, "prenom": prenom, "camera": camera_pos},
         keyframe=key_img,
         figures=figs,
-        table_data=table
+        table_data=table_data
     )
 
     with open(pdf_path, "rb") as f:
