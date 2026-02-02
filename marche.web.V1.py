@@ -1,27 +1,30 @@
 import streamlit as st
 import tensorflow as tf
 import tensorflow_hub as hub
-import cv2
+import cv2, os, tempfile
 import numpy as np
 import matplotlib.pyplot as plt
-import tempfile, os
 from datetime import datetime
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Image as PDFImage, Spacer, Table, TableStyle
-from reportlab.lib.styles import getSampleStyleSheet
-from reportlab.lib.units import cm
-from reportlab.lib.pagesizes import A4
-from reportlab.lib import colors
+
+from scipy.signal import savgol_filter
 from scipy.ndimage import gaussian_filter1d
 
-# ==============================
-# CONFIG
-# ==============================
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Image as PDFImage, Spacer, Table, TableStyle
+from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.units import cm
+from reportlab.lib import colors
+
+# =====================================================
+# CONFIG STREAMLIT
+# =====================================================
 st.set_page_config(page_title="GaitScan Pro", layout="wide")
 st.title("🏃 GaitScan Pro – Analyse Cinématique")
+st.subheader("Analyse articulaire et posture")
 
-# ==============================
-# MOVE NET
-# ==============================
+# =====================================================
+# LOAD MOVENET
+# =====================================================
 @st.cache_resource
 def load_movenet():
     return hub.load("https://tfhub.dev/google/movenet/singlepose/lightning/4")
@@ -30,204 +33,202 @@ movenet = load_movenet()
 
 def detect_pose(frame):
     img = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-    img = tf.image.resize_with_pad(tf.expand_dims(img, axis=0), 192, 192)
-    input_img = tf.cast(img, dtype=tf.int32)
-    outputs = movenet.signatures["serving_default"](input_img)
-    return outputs["output_0"].numpy()[0,0,:,:]
+    img = tf.image.resize_with_pad(tf.expand_dims(img, 0), 192, 192)
+    input_img = tf.cast(img, tf.int32)
+    outputs = movenet.signatures['serving_default'](input_img)
+    return outputs['output_0'].numpy()[0, 0, :, :]
 
-# ==============================
-# ARTICULATIONS
-# ==============================
-JOINTS_IDX = {
+# =====================================================
+# JOINTS
+# =====================================================
+BASE_JOINTS = {
     "Epaule G": 5, "Epaule D": 6,
     "Hanche G": 11, "Hanche D": 12,
     "Genou G": 13, "Genou D": 14,
     "Cheville G": 15, "Cheville D": 16
 }
 
-def adjust_joints_for_camera(cam_position, joints_idx):
+def adjust_joints(cam_position, joints):
+    j = joints.copy()
     if cam_position in ["Côté gauche", "Côté droit"]:
-        joints_idx = joints_idx.copy()
-        swaps = [
-            ("Epaule G","Epaule D"),
-            ("Hanche G","Hanche D"),
-            ("Genou G","Genou D"),
-            ("Cheville G","Cheville D")
-        ]
-        for a,b in swaps:
-            joints_idx[a], joints_idx[b] = joints_idx[b], joints_idx[a]
-    return joints_idx
+        for a, b in [("G","D")]:
+            for k in ["Epaule","Hanche","Genou","Cheville"]:
+                j[f"{k} G"], j[f"{k} D"] = j[f"{k} D"], j[f"{k} G"]
+    return j
 
-def angle(a,b,c):
-    ba, bc = a-b, c-b
-    cosang = np.dot(ba,bc)/(np.linalg.norm(ba)*np.linalg.norm(bc)+1e-6)
-    return np.degrees(np.arccos(np.clip(cosang,-1,1)))
+def angle(a, b, c):
+    ba, bc = a - b, c - b
+    cosang = np.dot(ba, bc) / (np.linalg.norm(ba)*np.linalg.norm(bc)+1e-6)
+    return np.degrees(np.arccos(np.clip(cosang, -1, 1)))
 
-# ==============================
-# VIDEO PROCESS
-# ==============================
-def process_video(video_path, frame_skip=2):
-    cap = cv2.VideoCapture(video_path)
-    results = {k:[] for k in ["Hanche G","Hanche D","Genou G","Genou D","Cheville G","Cheville D","Pelvis","Dos"]}
-    frames=[]
-    i=0
+# =====================================================
+# LISSAGE CLINIQUE (CORRIGÉ)
+# =====================================================
+def smooth_signal(signal, strength):
+    signal = np.array(signal)
+    if strength == 0 or len(signal) < 7:
+        return signal
+    win = min(len(signal)//3, 21)
+    if win % 2 == 0:
+        win -= 1
+    if win < 7:
+        win = 7
+    return savgol_filter(signal, window_length=win, polyorder=3)
+
+# =====================================================
+# MODELES NORMAUX
+# =====================================================
+def normal_curve(points, values, length):
+    x = np.linspace(0, 100, length)
+    curve = np.interp(x, points, values)
+    return gaussian_filter1d(curve, sigma=2)
+
+def normal_hip(l):    return normal_curve([0,30,55,85,100],[30,0,-15,20,30],l)
+def normal_knee(l):   return normal_curve([0,15,40,60,75,100],[5,18,3,35,60,5],l)
+def normal_ankle(l):  return normal_curve([0,10,40,60,80,100],[0,-5,10,-17.5,0,0],l)
+def normal_pelvis(l): return 5*np.sin(2*np.pi*np.linspace(0,1,l))
+
+# =====================================================
+# VIDEO PROCESSING
+# =====================================================
+def process_video(path, joints):
+    cap = cv2.VideoCapture(path)
+    res = {k: [] for k in ["Hanche G","Hanche D","Genou G","Genou D",
+                           "Cheville G","Cheville D","Pelvis","Dos"]}
+    best_frame, best_score = None, 0
 
     while cap.isOpened():
         ret, frame = cap.read()
         if not ret: break
-        if i % frame_skip == 0:
-            kp = detect_pose(frame)
-            frames.append((frame.copy(),kp))
+        kp = detect_pose(frame)
+        score = np.mean(kp[:,2])
+        if score > best_score:
+            best_score, best_frame = score, frame.copy()
 
-            results["Hanche G"].append(angle(kp[5,:2],kp[11,:2],kp[13,:2]))
-            results["Hanche D"].append(angle(kp[6,:2],kp[12,:2],kp[14,:2]))
-            results["Genou G"].append(angle(kp[11,:2],kp[13,:2],kp[15,:2]))
-            results["Genou D"].append(angle(kp[12,:2],kp[14,:2],kp[16,:2]))
+        # angles
+        res["Hanche G"].append(angle(kp[joints["Epaule G"],:2], kp[joints["Hanche G"],:2], kp[joints["Genou G"],:2]))
+        res["Hanche D"].append(angle(kp[joints["Epaule D"],:2], kp[joints["Hanche D"],:2], kp[joints["Genou D"],:2]))
 
-            vertical = kp[15,:2] + np.array([0,1])
-            results["Cheville G"].append(angle(kp[13,:2],kp[15,:2],vertical))
-            results["Cheville D"].append(angle(kp[14,:2],kp[16,:2],vertical))
+        res["Genou G"].append(angle(kp[joints["Hanche G"],:2], kp[joints["Genou G"],:2], kp[joints["Cheville G"],:2]))
+        res["Genou D"].append(angle(kp[joints["Hanche D"],:2], kp[joints["Genou D"],:2], kp[joints["Cheville D"],:2]))
 
-            pelvis = np.degrees(np.arctan2(kp[12,1]-kp[11,1],kp[12,0]-kp[11,0]))
-            results["Pelvis"].append(pelvis)
+        res["Cheville G"].append(angle(kp[joints["Genou G"],:2], kp[joints["Cheville G"],:2], kp[joints["Cheville G"],:2]+[0,1]))
+        res["Cheville D"].append(angle(kp[joints["Genou D"],:2], kp[joints["Cheville D"],:2], kp[joints["Cheville D"],:2]+[0,1]))
 
-            dos = angle(kp[5,:2],(kp[11,:2]+kp[12,:2])/2,kp[6,:2])
-            results["Dos"].append(dos)
-        i+=1
+        pelvis = np.degrees(np.arctan2(
+            kp[joints["Hanche D"],1]-kp[joints["Hanche G"],1],
+            kp[joints["Hanche D"],0]-kp[joints["Hanche G"],0]))
+        res["Pelvis"].append(pelvis)
+
+        dos = angle(kp[joints["Epaule G"],:2],
+                    (kp[joints["Hanche G"],:2]+kp[joints["Hanche D"],:2])/2,
+                    kp[joints["Epaule D"],:2])
+        res["Dos"].append(dos)
+
     cap.release()
-    return results, frames
+    return res, best_frame
 
-# ==============================
-# IMAGE CLÉ
-# ==============================
-def select_keyframe(frames):
-    frame = frames[len(frames)//2][0]
-    path = os.path.join(tempfile.gettempdir(),"keyframe.png")
-    cv2.imwrite(path,frame)
-    return path
-
-# ==============================
-# NORMALES
-# ==============================
-def normal_curve(n, vals):
-    x = np.linspace(0,100,len(vals))
-    return gaussian_filter1d(np.interp(np.linspace(0,100,n),x,vals),2)
-
-def normal_hip(n): return normal_curve(n,[30,0,-15,20,30])
-def normal_knee(n): return normal_curve(n,[5,18,3,35,60,5])
-def normal_ankle(n): return normal_curve(n,[0,-5,10,-17,0,0])
-
-# ==============================
-# GRAPHIQUE COMPARATIF
-# ==============================
-def plot_real_vs_normal(results,joints,norm_func,smoothing,title):
-    fig = plt.figure(figsize=(10,4))
-    gs = fig.add_gridspec(1,3)
-    ax_r = fig.add_subplot(gs[0,:2])
-    ax_n = fig.add_subplot(gs[0,2])
-
-    for j in joints:
-        ax_r.plot(gaussian_filter1d(results[j],smoothing),lw=2,label=j)
-    ax_r.set_title(f"{title} – Patient")
-    ax_r.legend()
-    ax_r.grid(alpha=0.3)
-
-    ax_n.plot(norm_func(len(results[joints[0]])),color="green",lw=2)
-    ax_n.set_title("Norme")
-    ax_n.grid(alpha=0.3)
-
-    plt.tight_layout()
-    return fig
-
-# ==============================
-# PDF
-# ==============================
-def export_pdf(patient,keyframe,joint_imgs,table_data):
+# =====================================================
+# PDF EXPORT
+# =====================================================
+def export_pdf(info, images, table, best_img):
     path = os.path.join(tempfile.gettempdir(),"rapport_gaitscan.pdf")
-    doc = SimpleDocTemplate(path,pagesize=A4)
+    doc = SimpleDocTemplate(path, pagesize=A4)
     styles = getSampleStyleSheet()
-
     story = [
-        Paragraph("<b>Analyse Cinématique – GaitScan Pro</b>",styles["Title"]),
-        Paragraph(f"Patient : {patient}",styles["Normal"]),
-        Paragraph(datetime.now().strftime("%d/%m/%Y"),styles["Normal"]),
-        Spacer(1,1*cm),
-        Paragraph("<b>Image extraite de la vidéo</b>",styles["Heading2"]),
-        PDFImage(keyframe,15*cm,8*cm),
+        Paragraph("<b>Bilan Analyse Cinématique</b>", styles["Title"]),
+        Paragraph(f"Patient : {info['nom']} {info['prenom']}", styles["Normal"]),
+        Paragraph(datetime.now().strftime("Date : %d/%m/%Y"), styles["Normal"]),
         Spacer(1,1*cm)
     ]
 
-    for name,img in joint_imgs.items():
-        story += [Paragraph(f"<b>{name}</b>",styles["Heading2"]),
-                  PDFImage(img,15*cm,5*cm),
-                  Spacer(1,0.5*cm)]
+    if best_img:
+        story.append(Paragraph("<b>Image de référence</b>", styles["Heading2"]))
+        story.append(PDFImage(best_img, width=12*cm, height=7*cm))
+        story.append(Spacer(1,0.5*cm))
 
-    table = Table([["Articulation","Min","Moy","Max"]]+table_data)
-    table.setStyle(TableStyle([("GRID",(0,0),(-1,-1),1,colors.black)]))
-    story.append(table)
+    for k,v in images.items():
+        story.append(Paragraph(f"<b>{k}</b>", styles["Heading3"]))
+        story.append(PDFImage(v, width=16*cm, height=6*cm))
+        story.append(Spacer(1,0.4*cm))
+
+    story.append(Paragraph("<b>Résumé articulaire (°)</b>", styles["Heading2"]))
+    t = Table([["Articulation","Min","Moy","Max"]] + table)
+    t.setStyle(TableStyle([("GRID",(0,0),(-1,-1),1,colors.black)]))
+    story.append(t)
 
     doc.build(story)
     return path
 
-# ==============================
-# INTERFACE
-# ==============================
+# =====================================================
+# SIDEBAR
+# =====================================================
 with st.sidebar:
+    st.header("👤 Patient")
     nom = st.text_input("Nom","DURAND")
     prenom = st.text_input("Prénom","Jean")
 
     st.subheader("📹 Source")
-    video_file = st.file_uploader("Vidéo",["mp4","avi","mov"])
-    live_cam = st.checkbox("Caméra live")
+    video = st.file_uploader("Vidéo",["mp4","avi"])
+    live = st.checkbox("Caméra live")
 
     st.subheader("📐 Caméra")
-    cam_position = st.selectbox("Position",["Devant","Côté gauche","Côté droit"])
+    cam_pos = st.selectbox("Position",["Devant","Côté gauche","Côté droit"])
 
+    st.subheader("⚙️ Paramètres")
     smoothing = st.slider("Lissage",0,5,2)
+    show_norm = st.checkbox("Afficher norme",True)
 
-JOINTS_IDX = adjust_joints_for_camera(cam_position,JOINTS_IDX)
+# =====================================================
+# MAIN
+# =====================================================
+ready = False
+if live:
+    cam = st.camera_input("Live")
+    if cam: video, ready = cam, True
+elif video:
+    ready = True
 
-video_ready=False
-if live_cam:
-    cam = st.camera_input("🎥 Caméra")
-    if cam:
-        video_file = cam
-        video_ready=True
-elif video_file:
-    video_ready=True
+if ready and st.button("▶ Lancer l'analyse"):
+    joints = adjust_joints(cam_pos, BASE_JOINTS)
 
-if video_ready and st.button("⚙️ Lancer l'analyse"):
-    tfile = tempfile.NamedTemporaryFile(delete=False,suffix=".mp4")
-    tfile.write(video_file.read())
-    tfile.close()
+    tmp = tempfile.NamedTemporaryFile(delete=False,suffix=".mp4")
+    tmp.write(video.read())
+    results, best_frame = process_video(tmp.name, joints)
+    os.unlink(tmp.name)
 
-    results,frames = process_video(tfile.name)
-    keyframe = select_keyframe(frames)
+    best_img_path = None
+    if best_frame is not None:
+        best_img_path = os.path.join(tempfile.gettempdir(),"best_frame.png")
+        cv2.imwrite(best_img_path, best_frame)
 
-    joint_imgs={}
-    table_data=[]
+    images, summary = {}, []
 
-    articulations=[
-        (["Hanche G","Hanche D"],normal_hip,"Hanche"),
-        (["Genou G","Genou D"],normal_knee,"Genou"),
-        (["Cheville G","Cheville D"],normal_ankle,"Cheville")
+    ARTICS = [
+        ("Hanche", ("Hanche G","Hanche D"), normal_hip),
+        ("Genou", ("Genou G","Genou D"), normal_knee),
+        ("Cheville", ("Cheville G","Cheville D"), normal_ankle)
     ]
 
-    for joints,norm,title in articulations:
-        fig = plot_real_vs_normal(results,joints,norm,smoothing,title)
+    for name,(jg,jd),norm in ARTICS:
+        fig,(ax1,ax2)=plt.subplots(1,2,figsize=(10,4),gridspec_kw={'width_ratios':[2,1]})
+        for j,c in zip([jg,jd],["red","blue"]):
+            s = smooth_signal(results[j],smoothing)
+            ax1.plot(s,label=j,color=c)
+            summary.append([j,f"{min(results[j]):.1f}",f"{np.mean(results[j]):.1f}",f"{max(results[j]):.1f}"])
+        ax1.set_title(f"{name} réel")
+        ax1.legend()
+
+        if show_norm:
+            ax2.plot(norm(len(s)),color="green")
+            ax2.set_title("Norme")
+
         st.pyplot(fig)
-
-        img_path = os.path.join(tempfile.gettempdir(),f"{title}.png")
-        fig.savefig(img_path,bbox_inches="tight")
+        p=os.path.join(tempfile.gettempdir(),f"{name}.png")
+        fig.savefig(p,bbox_inches="tight")
+        images[name]=p
         plt.close(fig)
-        joint_imgs[title]=img_path
 
-        for j in joints:
-            table_data.append([j,
-                f"{np.min(results[j]):.1f}",
-                f"{np.mean(results[j]):.1f}",
-                f"{np.max(results[j]):.1f}"])
-
-    pdf = export_pdf(f"{nom} {prenom}",keyframe,joint_imgs,table_data)
+    pdf = export_pdf({"nom":nom,"prenom":prenom},images,summary,best_img_path)
     with open(pdf,"rb") as f:
-        st.download_button("📥 Télécharger le rapport PDF",f,"Analyse_GaitScan.pdf")
+        st.download_button("📥 Télécharger le PDF",f,"rapport_gaitscan.pdf")
