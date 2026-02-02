@@ -84,33 +84,37 @@ def process_video(video_file, frame_skip=2):
     return results
 
 # ==============================
-# MODÈLE NORMAL PAR INTERPOLATION DES POINTS CLÉS
+# MODÈLE NORMAL LISSE
 # ==============================
-def normal_ankle(length=100):
-    """Cheville : Dorsiflexion + / Plantarflexion -"""
+def normal_ankle(length=100, sigma=2):
+    """Cheville : interpolation + lissage"""
     cycle_percent = np.array([0, 10, 40, 60, 80, 100])
     angles = np.array([0, -5, 10, -17.5, 0, 0])
     x = np.linspace(0, 100, length)
-    return np.interp(x, cycle_percent, angles)
+    curve = np.interp(x, cycle_percent, angles)
+    return gaussian_filter1d(curve, sigma=sigma)
 
-def normal_knee(length=100):
-    """Genou : Flexion +"""
+def normal_knee(length=100, sigma=2):
+    """Genou : interpolation + lissage"""
     cycle_percent = np.array([0, 15, 40, 60, 75, 100])
     angles = np.array([5, 18, 3, 35, 60, 5])
     x = np.linspace(0, 100, length)
-    return np.interp(x, cycle_percent, angles)
+    curve = np.interp(x, cycle_percent, angles)
+    return gaussian_filter1d(curve, sigma=sigma)
 
-def normal_hip(length=100):
-    """Hanche : Flexion + / Extension -"""
+def normal_hip(length=100, sigma=2):
+    """Hanche : interpolation + lissage"""
     cycle_percent = np.array([0, 30, 55, 85, 100])
     angles = np.array([30, 0, -15, 20, 30])
     x = np.linspace(0, 100, length)
-    return np.interp(x, cycle_percent, angles)
+    curve = np.interp(x, cycle_percent, angles)
+    return gaussian_filter1d(curve, sigma=sigma)
 
-def normal_pelvis(length=100):
-    """Pelvis : simple balance latérale ±5°"""
+def normal_pelvis(length=100, sigma=2):
+    """Pelvis : balance latérale lissée"""
     t = np.linspace(0, 1, length)
-    return 5*np.sin(2*np.pi*t)
+    curve = 5*np.sin(2*np.pi*t)
+    return gaussian_filter1d(curve, sigma=sigma)
 
 # ==============================
 # EXPORT PDF
