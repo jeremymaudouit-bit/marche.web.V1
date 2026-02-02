@@ -6,18 +6,19 @@ import numpy as np
 import matplotlib.pyplot as plt
 import tempfile, os
 from datetime import datetime
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Image as PDFImage, Spacer
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Image as PDFImage, Spacer, Table, TableStyle
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.lib.units import cm
 from reportlab.lib.pagesizes import A4
+from reportlab.lib import colors
 from scipy.ndimage import gaussian_filter1d
 
 # ==============================
 # CONFIG STREAMLIT
 # ==============================
 st.set_page_config(page_title="GaitScan Pro", layout="wide")
-st.title("🏃 GaitScan Pro - Analyse cinématique")
-st.subheader("Analyse flexion/extension des membres et posture du dos")
+st.title("🏃 GaitScan Pro - Analyse Cinématique")
+st.subheader("Flexion/extension des membres et posture du dos")
 
 # ==============================
 # CHARGEMENT MOVE NET
@@ -51,14 +52,13 @@ JOINTS_IDX = {
 }
 
 def angle(a, b, c):
-    """Calcul de l'angle abc en degrés"""
     ba = a - b
     bc = c - b
     cos_angle = np.dot(ba, bc) / (np.linalg.norm(ba)*np.linalg.norm(bc)+1e-6)
     return np.degrees(np.arccos(np.clip(cos_angle, -1, 1)))
 
 # ==============================
-# TRAITEMENT VIDÉO
+# TRAITEMENT VIDEO / CAMERA
 # ==============================
 def process_video(video_file, frame_skip=2):
     cap = cv2.VideoCapture(video_file)
@@ -74,42 +74,41 @@ def process_video(video_file, frame_skip=2):
             break
         if frame_idx % frame_skip == 0:
             kp = detect_pose(frame)
-            # Flexion/extension angles
-            # Hanche: epaule - hanche - genou
-            results["Hanche G"].append(angle(kp[JOINTS_IDX["Epaule G"],:2], 
-                                            kp[JOINTS_IDX["Hanche G"],:2], 
-                                            kp[JOINTS_IDX["Genou G"],:2]))
-            results["Hanche D"].append(angle(kp[JOINTS_IDX["Epaule D"],:2], 
-                                            kp[JOINTS_IDX["Hanche D"],:2], 
-                                            kp[JOINTS_IDX["Genou D"],:2]))
-            # Genou: hanche - genou - cheville
+            # Hanche
+            results["Hanche G"].append(angle(kp[JOINTS_IDX["Epaule G"],:2],
+                                             kp[JOINTS_IDX["Hanche G"],:2],
+                                             kp[JOINTS_IDX["Genou G"],:2]))
+            results["Hanche D"].append(angle(kp[JOINTS_IDX["Epaule D"],:2],
+                                             kp[JOINTS_IDX["Hanche D"],:2],
+                                             kp[JOINTS_IDX["Genou D"],:2]))
+            # Genou
             results["Genou G"].append(angle(kp[JOINTS_IDX["Hanche G"],:2],
-                                           kp[JOINTS_IDX["Genou G"],:2],
-                                           kp[JOINTS_IDX["Cheville G"],:2]))
+                                            kp[JOINTS_IDX["Genou G"],:2],
+                                            kp[JOINTS_IDX["Cheville G"],:2]))
             results["Genou D"].append(angle(kp[JOINTS_IDX["Hanche D"],:2],
-                                           kp[JOINTS_IDX["Genou D"],:2],
-                                           kp[JOINTS_IDX["Cheville D"],:2]))
-            # Cheville: genou - cheville - pied (approximé par cheville + vecteur vertical)
+                                            kp[JOINTS_IDX["Genou D"],:2],
+                                            kp[JOINTS_IDX["Cheville D"],:2]))
+            # Cheville
             results["Cheville G"].append(angle(kp[JOINTS_IDX["Genou G"],:2],
-                                             kp[JOINTS_IDX["Cheville G"],:2],
-                                             kp[JOINTS_IDX["Cheville G"],:2]+np.array([0,1])))
+                                               kp[JOINTS_IDX["Cheville G"],:2],
+                                               kp[JOINTS_IDX["Cheville G"],:2]+np.array([0,1])))
             results["Cheville D"].append(angle(kp[JOINTS_IDX["Genou D"],:2],
-                                             kp[JOINTS_IDX["Cheville D"],:2],
-                                             kp[JOINTS_IDX["Cheville D"],:2]+np.array([0,1])))
-            # Position du dos: angle epaule - hanche - hanche opposée
+                                               kp[JOINTS_IDX["Cheville D"],:2],
+                                               kp[JOINTS_IDX["Cheville D"],:2]+np.array([0,1])))
+            # Dos
             results["Dos"].append(angle(kp[JOINTS_IDX["Epaule G"],:2],
-                                       (kp[JOINTS_IDX["Hanche G"],:2]+kp[JOINTS_IDX["Hanche D"],:2])/2,
-                                       kp[JOINTS_IDX["Epaule D"],:2]))
-        frame_idx += 1
+                                        (kp[JOINTS_IDX["Hanche G"],:2]+kp[JOINTS_IDX["Hanche D"],:2])/2,
+                                        kp[JOINTS_IDX["Epaule D"],:2]))
+        frame_idx +=1
     cap.release()
     return results
 
 # ==============================
 # EXPORT PDF
 # ==============================
-def export_pdf(patient_info, joint_images):
+def export_pdf(patient_info, joint_images, summary_table):
     tmp = tempfile.gettempdir()
-    path = os.path.join(tmp, "bilan_analyse.pdf")
+    path = os.path.join(tmp, "rapport_analyse.pdf")
     doc = SimpleDocTemplate(path, pagesize=A4)
     styles = getSampleStyleSheet()
     story = [
@@ -120,8 +119,16 @@ def export_pdf(patient_info, joint_images):
     ]
     for joint, img_path in joint_images.items():
         story.append(Paragraph(f"<b>{joint}</b>", styles['Heading2']))
-        story.append(PDFImage(img_path, width=15*cm, height=8*cm))
+        story.append(PDFImage(img_path, width=15*cm, height=6*cm))
         story.append(Spacer(1,0.5*cm))
+    story.append(Paragraph("<b>Résumé des angles (°)</b>", styles['Heading2']))
+    table_data = [["Articulation", "Min", "Moyenne", "Max"]] + summary_table
+    table = Table(table_data, hAlign='LEFT')
+    table.setStyle(TableStyle([
+        ('BACKGROUND', (0,0), (-1,0), colors.lightgrey),
+        ('GRID', (0,0), (-1,-1), 1, colors.black)
+    ]))
+    story.append(table)
     doc.build(story)
     return path
 
@@ -132,34 +139,68 @@ with st.sidebar:
     st.header("👤 Patient")
     nom = st.text_input("Nom", "DURAND")
     prenom = st.text_input("Prénom", "Jean")
-    st.subheader("📹 Vidéo")
-    video_file = st.file_uploader("Charger une vidéo (gauche ou droite)", type=["mp4","mov","avi"])
+    st.subheader("📹 Source")
+    video_file = st.file_uploader("Charger une vidéo", type=["mp4","mov","avi"])
+    live_cam = st.checkbox("Ou utiliser la caméra live")
     st.subheader("⚙️ Paramètres")
     smoothing = st.slider("Lissage des courbes", 0, 10, 2)
 
-if video_file:
-    if st.button("⚙️ Lancer l'analyse"):
-        with st.spinner("Analyse en cours..."):
-            tfile = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
-            tfile.write(video_file.read())
-            results = process_video(tfile.name, frame_skip=2)
-            os.unlink(tfile.name)
+# ==============================
+# ANALYSE
+# ==============================
+video_ready = False
+if live_cam:
+    cam_file = st.camera_input("🎥 Caméra")
+    if cam_file:
+        video_file = cam_file
+        video_ready = True
+elif video_file:
+    video_ready = True
 
-            joint_imgs = {}
-            for joint, angles in results.items():
-                angles_smooth = gaussian_filter1d(angles, sigma=smoothing)
-                fig, ax = plt.subplots(figsize=(10,4))
-                ax.plot(angles_smooth, lw=2)
-                ax.set_title(f"{joint} (flexion/extension ou posture dos)")
-                ax.set_xlabel("Frame")
-                ax.set_ylabel("Angle (°)")
-                st.pyplot(fig)
-                img_path = os.path.join(tempfile.gettempdir(), f"{joint}.png")
-                fig.savefig(img_path, bbox_inches='tight')
-                plt.close(fig)
-                joint_imgs[joint] = img_path
+if video_ready and st.button("⚙️ Lancer l'analyse"):
+    with st.spinner("Analyse en cours..."):
+        tfile = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
+        tfile.write(video_file.read())
+        results = process_video(tfile.name, frame_skip=2)
+        os.unlink(tfile.name)
 
-            # Export PDF
-            pdf_path = export_pdf({"nom": nom, "prenom": prenom}, joint_imgs)
-            with open(pdf_path, "rb") as f:
-                st.download_button("📥 Télécharger le rapport PDF", f, f"Analyse_{nom}.pdf")
+        joint_imgs = {}
+        summary_table = []
+        # Affichage 2 courbes par colonne
+        col1, col2 = st.columns(2)
+        for i, joint_pair in enumerate([("Hanche G","Hanche D"),("Genou G","Genou D"),("Cheville G","Cheville D")]):
+            fig, axes = plt.subplots(1,2,figsize=(12,4))
+            for j, joint in enumerate(joint_pair):
+                angles_smooth = gaussian_filter1d(results[joint], sigma=smoothing)
+                axes[j].plot(angles_smooth, lw=2)
+                axes[j].set_title(joint)
+                axes[j].set_xlabel("Frame")
+                axes[j].set_ylabel("Angle (°)")
+            plt.tight_layout()
+            col = col1 if i%2==0 else col2
+            col.pyplot(fig)
+            img_path = os.path.join(tempfile.gettempdir(), f"{joint_pair[0]}_{joint_pair[1]}.png")
+            fig.savefig(img_path, bbox_inches='tight')
+            plt.close(fig)
+            joint_imgs[f"{joint_pair[0]} & {joint_pair[1]}"] = img_path
+            # résumé
+            for joint in joint_pair:
+                summary_table.append([joint, f"{np.min(results[joint]):.1f}", f"{np.mean(results[joint]):.1f}", f"{np.max(results[joint]):.1f}"])
+        # Dos
+        angles_smooth = gaussian_filter1d(results["Dos"], sigma=smoothing)
+        fig, ax = plt.subplots(figsize=(10,4))
+        ax.plot(angles_smooth, lw=2, color='green')
+        ax.set_title("Dos")
+        ax.set_xlabel("Frame")
+        ax.set_ylabel("Angle (°)")
+        st.pyplot(fig)
+        img_path = os.path.join(tempfile.gettempdir(), f"Dos.png")
+        fig.savefig(img_path, bbox_inches='tight')
+        plt.close(fig)
+        joint_imgs["Dos"] = img_path
+        summary_table.append(["Dos", f"{np.min(results['Dos']):.1f}", f"{np.mean(results['Dos']):.1f}", f"{np.max(results['Dos']):.1f}"])
+
+        # Export PDF
+        pdf_path = export_pdf({"nom": nom, "prenom": prenom}, joint_imgs, summary_table)
+        with open(pdf_path, "rb") as f:
+            st.download_button("📥 Télécharger le rapport PDF", f, f"Analyse_{nom}.pdf")
