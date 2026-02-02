@@ -155,6 +155,9 @@ def export_pdf(patient, keyframe, figures, table_data):
         f"<b>Date :</b> {datetime.now().strftime('%d/%m/%Y')}<br/>"
         f"<b>Caméra :</b> {patient.get('camera','N/A')}", styles["Normal"]
     ))
+    story.append(Paragraph(
+        f"<b>Phase du pas basée sur :</b> {patient.get('phase_cote','N/A')}", styles["Normal"]
+    ))
     story.append(Spacer(1,0.5*cm))
 
     story.append(Paragraph("<b>Image représentative du cycle</b>", styles["Heading2"]))
@@ -190,6 +193,7 @@ with st.sidebar:
     smooth = st.slider("Lissage band-pass",0,10,3)
     src = st.radio("Source",["Vidéo","Caméra"])
     camera_pos = st.selectbox("Position de la caméra", ["Devant", "Droite", "Gauche"])
+    phase_droite = st.checkbox("Phase du pas basée sur le côté droit (sinon gauche)", value=True)
 
 video = st.file_uploader("Vidéo",["mp4","avi","mov"]) if src=="Vidéo" else st.camera_input("Caméra")
 
@@ -204,8 +208,15 @@ if video and st.button("▶ Lancer l'analyse"):
     data, heel_y, frames = process_video(tmp.name)
     os.unlink(tmp.name)
 
-    heel_f = bandpass(np.array(heel_y), smooth)
-    c0, c1 = detect_cycle(heel_f)
+    # Détecter la phase du pas sur le côté choisi
+    if phase_droite:
+        heel_f_ref = bandpass(np.array(data["Cheville D"]), smooth)
+        phase_color = "blue"
+    else:
+        heel_f_ref = bandpass(np.array(data["Cheville G"]), smooth)
+        phase_color = "orange"
+
+    c0, c1 = detect_cycle(heel_f_ref)
 
     key_img = os.path.join(tempfile.gettempdir(),"keyframe.png")
     cv2.imwrite(key_img, frames[(c0+c1)//2])
@@ -220,7 +231,7 @@ if video and st.button("▶ Lancer l'analyse"):
 
         ax1.plot(g,label="Gauche",color="red")
         ax1.plot(d,label="Droite",color="blue")
-        ax1.axvspan(c0,c1,color="orange",alpha=0.2)
+        ax1.axvspan(c0, c1, color=phase_color, alpha=0.3)
         ax1.set_title(f"{joint} – Analyse")
         ax1.legend()
 
@@ -239,7 +250,12 @@ if video and st.button("▶ Lancer l'analyse"):
 
     # PDF
     pdf_path = export_pdf(
-        patient={"nom": nom, "prenom": prenom, "camera": camera_pos},
+        patient={
+            "nom": nom,
+            "prenom": prenom,
+            "camera": camera_pos,
+            "phase_cote": "Droite" if phase_droite else "Gauche"
+        },
         keyframe=key_img,
         figures=figs,
         table_data=table_data
