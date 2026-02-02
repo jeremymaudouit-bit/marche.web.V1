@@ -62,20 +62,19 @@ def angle(a, b, c):
     return np.degrees(np.arccos(np.clip(cosang, -1, 1)))
 
 # =====================================================
-# LISSAGE CLINIQUE PARAMÉTRABLE
+# LISSAGE CLINIQUE DOUX
 # =====================================================
-def smooth_signal(signal, strength):
-    """
-    Lissage Savitzky-Golay paramétrable.
-    strength = 0 → brut, 10 → lissage très fort
-    """
+def smooth_signal(signal, slider_value):
     signal = np.array(signal)
-    if strength == 0 or len(signal) < 7:
+    if slider_value == 0 or len(signal) < 7:
         return signal
     
-    # Fenêtre proportionnelle à strength et longueur du signal
+    # Transformation douce du slider
+    effective_strength = np.sqrt(slider_value)  # racine carrée = lissage progressif
+    
+    # Fenêtre du Savitzky-Golay
     base = max(len(signal)//10, 7)
-    win = min(base*(strength+1), len(signal)//2)
+    win = min(int(base * (effective_strength + 1)), len(signal)//2)
     if win % 2 == 0:
         win -= 1
     if win < 7:
