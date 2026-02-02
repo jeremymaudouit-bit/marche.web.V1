@@ -18,10 +18,10 @@ from scipy.ndimage import gaussian_filter1d
 # ==============================
 st.set_page_config(page_title="GaitScan Pro", layout="wide")
 st.title("🏃 GaitScan Pro - Analyse Cinématique")
-st.subheader("Flexion/extension des membres et posture du dos")
+st.subheader("Analyse automatique de la marche")
 
 # ==============================
-# CHARGEMENT MOVE NET
+# MOVE NET
 # ==============================
 @st.cache_resource
 def load_movenet():
@@ -34,152 +34,131 @@ def detect_pose(frame):
     img = tf.image.resize_with_pad(tf.expand_dims(img, axis=0), 192, 192)
     input_img = tf.cast(img, dtype=tf.int32)
     outputs = movenet.signatures['serving_default'](input_img)
-    keypoints = outputs['output_0'].numpy()
-    return keypoints[0,0,:,:]
+    return outputs['output_0'].numpy()[0,0,:,:]
 
 # ==============================
 # ARTICULATIONS
 # ==============================
 JOINTS_IDX = {
-    "Hanche G": 11, "Genou G": 13, "Cheville G": 15,
-    "Hanche D": 12, "Genou D": 14, "Cheville D": 16,
-    "Epaule G": 5, "Epaule D": 6
+    "Epaule G": 5, "Epaule D": 6,
+    "Hanche G": 11, "Hanche D": 12,
+    "Genou G": 13, "Genou D": 14,
+    "Cheville G": 15, "Cheville D": 16
 }
 
 def angle(a, b, c):
     ba = a - b
     bc = c - b
-    cos_angle = np.dot(ba, bc) / (np.linalg.norm(ba)*np.linalg.norm(bc)+1e-6)
-    return np.degrees(np.arccos(np.clip(cos_angle, -1, 1)))
+    cosang = np.dot(ba, bc) / (np.linalg.norm(ba)*np.linalg.norm(bc)+1e-6)
+    return np.degrees(np.arccos(np.clip(cosang, -1, 1)))
 
 # ==============================
-# TRAITEMENT VIDEO / CAMERA
+# VIDEO
 # ==============================
-def process_video(video_file, frame_skip=2):
-    cap = cv2.VideoCapture(video_file)
-    results = {joint: [] for joint in ["Hanche G","Genou G","Cheville G","Hanche D","Genou D","Cheville D","Pelvis","Dos"]}
+def process_video(video_path, frame_skip=2):
+    cap = cv2.VideoCapture(video_path)
+    results = {k: [] for k in ["Hanche G","Hanche D","Genou G","Genou D","Cheville G","Cheville D","Pelvis","Dos"]}
     frames = []
-    frame_idx = 0
+    i = 0
+
     while cap.isOpened():
         ret, frame = cap.read()
-        if not ret: break
-        if frame_idx % frame_skip == 0:
+        if not ret:
+            break
+        if i % frame_skip == 0:
             kp = detect_pose(frame)
             frames.append((frame.copy(), kp))
-            # Hanche
-            results["Hanche G"].append(angle(kp[JOINTS_IDX["Epaule G"],:2], kp[JOINTS_IDX["Hanche G"],:2], kp[JOINTS_IDX["Genou G"],:2]))
-            results["Hanche D"].append(angle(kp[JOINTS_IDX["Epaule D"],:2], kp[JOINTS_IDX["Hanche D"],:2], kp[JOINTS_IDX["Genou D"],:2]))
-            # Genou
-            results["Genou G"].append(angle(kp[JOINTS_IDX["Hanche G"],:2], kp[JOINTS_IDX["Genou G"],:2], kp[JOINTS_IDX["Cheville G"],:2]))
-            results["Genou D"].append(angle(kp[JOINTS_IDX["Hanche D"],:2], kp[JOINTS_IDX["Genou D"],:2], kp[JOINTS_IDX["Cheville D"],:2]))
-            # Cheville
-            results["Cheville G"].append(angle(kp[JOINTS_IDX["Genou G"],:2], kp[JOINTS_IDX["Cheville G"],:2], kp[JOINTS_IDX["Cheville G"],:2]+np.array([0,1])))
-            results["Cheville D"].append(angle(kp[JOINTS_IDX["Genou D"],:2], kp[JOINTS_IDX["Cheville D"],:2], kp[JOINTS_IDX["Cheville D"],:2]+np.array([0,1])))
-            # Dos
-            results["Dos"].append(angle(kp[JOINTS_IDX["Epaule G"],:2], (kp[JOINTS_IDX["Hanche G"],:2]+kp[JOINTS_IDX["Hanche D"],:2])/2, kp[JOINTS_IDX["Epaule D"],:2]))
-            # Pelvis
-            pelvis_angle = np.degrees(np.arctan2(kp[JOINTS_IDX["Hanche D"],1]-kp[JOINTS_IDX["Hanche G"],1],
-                                                kp[JOINTS_IDX["Hanche D"],0]-kp[JOINTS_IDX["Hanche G"],0]))
-            results["Pelvis"].append(pelvis_angle)
-        frame_idx +=1
+
+            results["Hanche G"].append(angle(kp[5,:2], kp[11,:2], kp[13,:2]))
+            results["Hanche D"].append(angle(kp[6,:2], kp[12,:2], kp[14,:2]))
+            results["Genou G"].append(angle(kp[11,:2], kp[13,:2], kp[15,:2]))
+            results["Genou D"].append(angle(kp[12,:2], kp[14,:2], kp[16,:2]))
+
+            vertical = kp[15,:2] + np.array([0,1])
+            results["Cheville G"].append(angle(kp[13,:2], kp[15,:2], vertical))
+            results["Cheville D"].append(angle(kp[14,:2], kp[16,:2], vertical))
+
+            pelvis = np.degrees(np.arctan2(kp[12,1]-kp[11,1], kp[12,0]-kp[11,0]))
+            results["Pelvis"].append(pelvis)
+
+            dos = angle(kp[5,:2], (kp[11,:2]+kp[12,:2])/2, kp[6,:2])
+            results["Dos"].append(dos)
+        i += 1
+
     cap.release()
     return results, frames
 
 # ==============================
-# SÉLECTION IMAGE REPRÉSENTATIVE (toujours retourne une image)
+# IMAGE CLÉ (GARANTIE)
 # ==============================
-def select_best_frame(frames):
-    if not frames:
-        return None  # aucune frame lue
-
-    best_score = float('inf')
-    best_frame = None
-    for frame, kp in frames:
-        shoulder_mid = (kp[JOINTS_IDX["Epaule G"],:2] + kp[JOINTS_IDX["Epaule D"],:2]) / 2
-        hip_mid = (kp[JOINTS_IDX["Hanche G"],:2] + kp[JOINTS_IDX["Hanche D"],:2]) / 2
-        vertical = np.array([0, -1])
-        torso_vec = shoulder_mid - hip_mid
-        torso_vec = torso_vec / (np.linalg.norm(torso_vec)+1e-6)
-        angle_from_vertical = np.arccos(np.clip(np.dot(torso_vec, vertical), -1,1))
-        if angle_from_vertical < best_score:
-            best_score = angle_from_vertical
-            best_frame = frame
-
-    # Si aucune "meilleure" frame trouvée, prendre la première frame disponible
-    if best_frame is None:
-        best_frame = frames[0][0]
-
-    # Sauvegarder image
-    img_path = os.path.join(tempfile.gettempdir(), "keyframe.png")
-    cv2.imwrite(img_path, best_frame)
-    return img_path
+def select_keyframe(frames):
+    frame = frames[len(frames)//2][0]
+    path = os.path.join(tempfile.gettempdir(), "keyframe.png")
+    cv2.imwrite(path, frame)
+    return path
 
 # ==============================
-# MODÈLE NORMAL LISSE
+# MODÈLES NORMAUX
 # ==============================
-def normal_ankle(length=100, sigma=2):
-    cycle_percent = np.array([0, 10, 40, 60, 80, 100])
-    angles = np.array([0, -5, 10, -17.5, 0, 0])
-    x = np.linspace(0, 100, length)
-    curve = np.interp(x, cycle_percent, angles)
-    return gaussian_filter1d(curve, sigma=sigma)
+def normal_curve(points, angles):
+    x = np.linspace(0, 100, len(angles))
+    return gaussian_filter1d(np.interp(np.linspace(0,100,points), x, angles), 2)
 
-def normal_knee(length=100, sigma=2):
-    cycle_percent = np.array([0, 15, 40, 60, 75, 100])
-    angles = np.array([5, 18, 3, 35, 60, 5])
-    x = np.linspace(0, 100, length)
-    curve = np.interp(x, cycle_percent, angles)
-    return gaussian_filter1d(curve, sigma=sigma)
-
-def normal_hip(length=100, sigma=2):
-    cycle_percent = np.array([0, 30, 55, 85, 100])
-    angles = np.array([30, 0, -15, 20, 30])
-    x = np.linspace(0, 100, length)
-    curve = np.interp(x, cycle_percent, angles)
-    return gaussian_filter1d(curve, sigma=sigma)
-
-def normal_pelvis(length=100, sigma=2):
-    t = np.linspace(0, 1, length)
-    curve = 5*np.sin(2*np.pi*t)
-    return gaussian_filter1d(curve, sigma=sigma)
+def normal_hip(n): return normal_curve(n, [30, 0, -15, 20, 30])
+def normal_knee(n): return normal_curve(n, [5, 18, 3, 35, 60, 5])
+def normal_ankle(n): return normal_curve(n, [0, -5, 10, -17, 0, 0])
 
 # ==============================
-# EXPORT PDF
+# GRAPHIQUE COMPARATIF
 # ==============================
-def export_pdf(patient_info, joint_images, summary_table):
-    tmp = tempfile.gettempdir()
-    path = os.path.join(tmp, "rapport_analyse.pdf")
+def plot_real_vs_normal(results, joints, normal_func, smoothing, title):
+    fig = plt.figure(figsize=(10,4))
+    gs = fig.add_gridspec(1,3)
+
+    ax_real = fig.add_subplot(gs[0,:2])
+    ax_norm = fig.add_subplot(gs[0,2])
+
+    for j in joints:
+        ax_real.plot(gaussian_filter1d(results[j], smoothing), lw=2, label=j)
+
+    ax_real.set_title(f"{title} – Mesuré")
+    ax_real.legend()
+    ax_real.grid(alpha=0.3)
+
+    n = len(results[joints[0]])
+    ax_norm.plot(normal_func(n), color="green", lw=2)
+    ax_norm.set_title("Norme")
+    ax_norm.grid(alpha=0.3)
+
+    plt.tight_layout()
+    return fig
+
+# ==============================
+# PDF
+# ==============================
+def export_pdf(patient, keyframe, joint_imgs, table_data):
+    path = os.path.join(tempfile.gettempdir(), "rapport_gaitscan.pdf")
     doc = SimpleDocTemplate(path, pagesize=A4)
     styles = getSampleStyleSheet()
     story = [
-        Paragraph("<b>Bilan Analyse Cinématique</b>", styles['Title']),
-        Paragraph(f"Patient : {patient_info['nom']} {patient_info['prenom']}", styles['Normal']),
-        Paragraph(f"Date : {datetime.now().strftime('%d/%m/%Y')}", styles['Normal']),
+        Paragraph("<b>Analyse Cinématique – GaitScan Pro</b>", styles["Title"]),
+        Paragraph(f"Patient : {patient}", styles["Normal"]),
+        Paragraph(datetime.now().strftime("%d/%m/%Y"), styles["Normal"]),
+        Spacer(1,1*cm),
+        Paragraph("<b>Image extraite de la vidéo</b>", styles["Heading2"]),
+        PDFImage(keyframe, width=15*cm, height=8*cm),
         Spacer(1,1*cm)
     ]
-    
-    # Image représentative
-    keyframe_path = patient_info.get("keyframe")
-    if keyframe_path:
-        story.append(Paragraph("<b>Image extraite de la vidéo</b>", styles['Heading2']))
-        story.append(PDFImage(keyframe_path, width=15*cm, height=8*cm))
+
+    for name, img in joint_imgs.items():
+        story.append(Paragraph(f"<b>{name}</b>", styles["Heading2"]))
+        story.append(PDFImage(img, width=15*cm, height=5*cm))
         story.append(Spacer(1,0.5*cm))
-    
-    # Graphiques articulations
-    for joint, img_path in joint_images.items():
-        story.append(Paragraph(f"<b>{joint}</b>", styles['Heading2']))
-        story.append(PDFImage(img_path, width=15*cm, height=6*cm))
-        story.append(Spacer(1,0.5*cm))
-    
-    # Tableau résumé
-    story.append(Paragraph("<b>Résumé des angles (°)</b>", styles['Heading2']))
-    table_data = [["Articulation", "Min", "Moyenne", "Max"]] + summary_table
-    table = Table(table_data, hAlign='LEFT')
-    table.setStyle(TableStyle([
-        ('BACKGROUND', (0,0), (-1,0), colors.lightgrey),
-        ('GRID', (0,0), (-1,-1), 1, colors.black)
-    ]))
+
+    table = Table([["Articulation","Min","Moy","Max"]] + table_data)
+    table.setStyle(TableStyle([("GRID",(0,0),(-1,-1),1,colors.black)]))
     story.append(table)
+
     doc.build(story)
     return path
 
@@ -187,129 +166,44 @@ def export_pdf(patient_info, joint_images, summary_table):
 # INTERFACE
 # ==============================
 with st.sidebar:
-    st.header("👤 Patient")
     nom = st.text_input("Nom", "DURAND")
     prenom = st.text_input("Prénom", "Jean")
-    
-    st.subheader("📹 Source")
-    video_file = st.file_uploader("Charger une vidéo", type=["mp4","mov","avi"])
-    live_cam = st.checkbox("Ou utiliser la caméra live")
-    
-    st.subheader("⚙️ Paramètres")
-    smoothing = st.slider("Lissage des courbes", 0, 10, 2)
-    show_normal = st.checkbox("Afficher modèle normal à côté", value=True)
+    video = st.file_uploader("Vidéo", type=["mp4","avi"])
+    smoothing = st.slider("Lissage", 0, 5, 2)
 
-    st.subheader("📐 Position caméra")
-    cam_position = st.selectbox("Position de la caméra par rapport au patient", ["Devant", "Côté gauche", "Côté droit"])
+if video and st.button("Lancer l'analyse"):
+    tfile = tempfile.NamedTemporaryFile(delete=False)
+    tfile.write(video.read())
 
-# Ajustement G/D selon caméra
-def adjust_joints_for_camera(cam_position, joints_idx):
-    if cam_position in ["Côté gauche", "Côté droit"]:
-        joints_idx = joints_idx.copy()
-        joints_idx["Hanche G"], joints_idx["Hanche D"] = joints_idx["Hanche D"], joints_idx["Hanche G"]
-        joints_idx["Genou G"], joints_idx["Genou D"] = joints_idx["Genou D"], joints_idx["Genou G"]
-        joints_idx["Cheville G"], joints_idx["Cheville D"] = joints_idx["Cheville D"], joints_idx["Cheville G"]
-        joints_idx["Epaule G"], joints_idx["Epaule D"] = joints_idx["Epaule D"], joints_idx["Epaule G"]
-    return joints_idx
+    results, frames = process_video(tfile.name)
+    keyframe = select_keyframe(frames)
 
-JOINTS_IDX = adjust_joints_for_camera(cam_position, JOINTS_IDX)
+    joint_imgs = {}
+    table_data = []
 
-# Analyse
-video_ready = False
-if live_cam:
-    cam_file = st.camera_input("🎥 Caméra")
-    if cam_file:
-        video_file = cam_file
-        video_ready = True
-elif video_file:
-    video_ready = True
+    articulations = [
+        (["Hanche G","Hanche D"], normal_hip, "Hanche"),
+        (["Genou G","Genou D"], normal_knee, "Genou"),
+        (["Cheville G","Cheville D"], normal_ankle, "Cheville")
+    ]
 
-if video_ready and st.button("⚙️ Lancer l'analyse"):
-    with st.spinner("Analyse en cours..."):
-        tfile = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
-        tfile.write(video_file.read())
-        results, frames = process_video(tfile.name, frame_skip=2)
-        os.unlink(tfile.name)
-
-        # Sélection meilleure frame (ou fallback sur la première)
-        keyframe_img = select_best_frame(frames)
-
-        joint_imgs = {}
-        summary_table = []
-
-        articulation_pairs = [("Hanche G","Hanche D"), ("Genou G","Genou D"), ("Cheville G","Cheville D")]
-        normal_funcs = [normal_hip, normal_knee, normal_ankle]
-
-        for (joint_pair, normal_func) in zip(articulation_pairs, normal_funcs):
-            col1, col2 = st.columns(2)
-
-            # Colonne 1 : réel
-            fig, ax = plt.subplots(figsize=(6,4))
-            for joint, color in zip(joint_pair, ['red','blue']):
-                angles_smooth = gaussian_filter1d(results[joint], sigma=smoothing)
-                ax.plot(angles_smooth, lw=2, color=color, label=joint)
-                summary_table.append([joint, f"{np.min(results[joint]):.1f}", f"{np.mean(results[joint]):.1f}", f"{np.max(results[joint]):.1f}"])
-            ax.set_title(f"{joint_pair[0].split()[0]} : Réel")
-            ax.set_xlabel("Frame")
-            ax.set_ylabel("Angle (°)")
-            ax.legend()
-            col1.pyplot(fig)
-            img_path = os.path.join(tempfile.gettempdir(), f"{joint_pair[0]}_reel.png")
-            fig.savefig(img_path, bbox_inches='tight')
-            plt.close(fig)
-            joint_imgs[f"{joint_pair[0]} & {joint_pair[1]} Réel"] = img_path
-
-            # Colonne 2 : modèle normal
-            if show_normal:
-                fig2, ax2 = plt.subplots(figsize=(6,4))
-                length = len(results[joint_pair[0]])
-                normal_curve = normal_func(length)
-                ax2.plot(normal_curve, lw=2, color='green', label="Modèle normal")
-                ax2.set_title(f"{joint_pair[0].split()[0]} : Modèle normal")
-                ax2.set_xlabel("Frame")
-                ax2.set_ylabel("Angle (°)")
-                ax2.legend()
-                col2.pyplot(fig2)
-                img_path2 = os.path.join(tempfile.gettempdir(), f"{joint_pair[0]}_normal.png")
-                fig2.savefig(img_path2, bbox_inches='tight')
-                plt.close(fig2)
-                joint_imgs[f"{joint_pair[0]} & {joint_pair[1]} Normal"] = img_path2
-
-        # Pelvis
-        angles_smooth = gaussian_filter1d(results["Pelvis"], sigma=smoothing)
-        fig, ax = plt.subplots(figsize=(10,4))
-        ax.plot(angles_smooth, lw=2, color='purple', label="Pelvis réel")
-        if show_normal:
-            normal_curve = normal_pelvis(len(angles_smooth))
-            ax.plot(normal_curve, lw=2, color='green', linestyle='--', label="Pelvis modèle")
-        ax.set_title("Bascule Pelvis")
-        ax.set_xlabel("Frame")
-        ax.set_ylabel("Angle (°)")
-        ax.legend()
+    for joints, norm, title in articulations:
+        fig = plot_real_vs_normal(results, joints, norm, smoothing, title)
         st.pyplot(fig)
-        img_path = os.path.join(tempfile.gettempdir(), "Pelvis.png")
-        fig.savefig(img_path, bbox_inches='tight')
-        plt.close(fig)
-        joint_imgs["Pelvis"] = img_path
-        summary_table.append(["Pelvis", f"{np.min(results['Pelvis']):.1f}", f"{np.mean(results['Pelvis']):.1f}", f"{np.max(results['Pelvis']):.1f}"])
 
-        # Dos
-        angles_smooth = gaussian_filter1d(results["Dos"], sigma=smoothing)
-        fig, ax = plt.subplots(figsize=(10,4))
-        ax.plot(angles_smooth, lw=2, color='green', label="Dos")
-        ax.set_title("Dos")
-        ax.set_xlabel("Frame")
-        ax.set_ylabel("Angle (°)")
-        ax.legend()
-        st.pyplot(fig)
-        img_path = os.path.join(tempfile.gettempdir(), f"Dos.png")
-        fig.savefig(img_path, bbox_inches='tight')
+        img_path = os.path.join(tempfile.gettempdir(), f"{title}.png")
+        fig.savefig(img_path, bbox_inches="tight")
         plt.close(fig)
-        joint_imgs["Dos"] = img_path
-        summary_table.append(["Dos", f"{np.min(results['Dos']):.1f}", f"{np.mean(results['Dos']):.1f}", f"{np.max(results['Dos']):.1f}"])
+        joint_imgs[title] = img_path
 
-        # Export PDF
-        patient_info = {"nom": nom, "prenom": prenom, "keyframe": keyframe_img}
-        pdf_path = export_pdf(patient_info, joint_imgs, summary_table)
-        with open(pdf_path, "rb") as f:
-            st.download_button("📥 Télécharger le rapport PDF", f, f"Analyse_{nom}.pdf")
+        for j in joints:
+            table_data.append([
+                j,
+                f"{np.min(results[j]):.1f}",
+                f"{np.mean(results[j]):.1f}",
+                f"{np.max(results[j]):.1f}"
+            ])
+
+    pdf = export_pdf(f"{nom} {prenom}", keyframe, joint_imgs, table_data)
+    with open(pdf, "rb") as f:
+        st.download_button("📥 Télécharger le rapport PDF", f, "Analyse_GaitScan.pdf")
