@@ -65,7 +65,6 @@ def process_video(video_file, frame_skip=2):
         if not ret: break
         if frame_idx % frame_skip == 0:
             kp = detect_pose(frame)
-            # Stocker frame pour sélection image
             frames.append((frame.copy(), kp))
             # Hanche
             results["Hanche G"].append(angle(kp[JOINTS_IDX["Epaule G"],:2], kp[JOINTS_IDX["Hanche G"],:2], kp[JOINTS_IDX["Genou G"],:2]))
@@ -87,13 +86,15 @@ def process_video(video_file, frame_skip=2):
     return results, frames
 
 # ==============================
-# SÉLECTION IMAGE REPRÉSENTATIVE
+# SÉLECTION IMAGE REPRÉSENTATIVE (toujours retourne une image)
 # ==============================
 def select_best_frame(frames):
+    if not frames:
+        return None  # aucune frame lue
+
     best_score = float('inf')
     best_frame = None
     for frame, kp in frames:
-        # Angle torse = angle entre épaules et milieu hanches
         shoulder_mid = (kp[JOINTS_IDX["Epaule G"],:2] + kp[JOINTS_IDX["Epaule D"],:2]) / 2
         hip_mid = (kp[JOINTS_IDX["Hanche G"],:2] + kp[JOINTS_IDX["Hanche D"],:2]) / 2
         vertical = np.array([0, -1])
@@ -103,12 +104,15 @@ def select_best_frame(frames):
         if angle_from_vertical < best_score:
             best_score = angle_from_vertical
             best_frame = frame
+
+    # Si aucune "meilleure" frame trouvée, prendre la première frame disponible
+    if best_frame is None:
+        best_frame = frames[0][0]
+
     # Sauvegarder image
-    if best_frame is not None:
-        img_path = os.path.join(tempfile.gettempdir(), "keyframe.png")
-        cv2.imwrite(img_path, best_frame)
-        return img_path
-    return None
+    img_path = os.path.join(tempfile.gettempdir(), "keyframe.png")
+    cv2.imwrite(img_path, best_frame)
+    return img_path
 
 # ==============================
 # MODÈLE NORMAL LISSE
@@ -227,7 +231,7 @@ if video_ready and st.button("⚙️ Lancer l'analyse"):
         results, frames = process_video(tfile.name, frame_skip=2)
         os.unlink(tfile.name)
 
-        # Sélection meilleure frame
+        # Sélection meilleure frame (ou fallback sur la première)
         keyframe_img = select_best_frame(frames)
 
         joint_imgs = {}
