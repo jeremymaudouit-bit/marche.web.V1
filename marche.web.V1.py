@@ -84,22 +84,27 @@ def process_video(video_file, frame_skip=2):
     return results
 
 # ==============================
-# MODÈLE NORMAL (d'après ton image)
+# MODÈLE NORMAL RÉALISTE
 # ==============================
 def normal_pelvis(length=100):
-    return np.full(length, 10)  # 0-20°
+    """Bascule latérale du pelvis (~±5°)"""
+    t = np.linspace(0, 1, length)
+    return 5*np.sin(2*np.pi*t)
 
 def normal_hip(length=100):
-    t = np.linspace(0, 2*np.pi, length)
-    return 20*np.sin(t) + 20  # -20° à 60°
+    """Flexion/extension hanche (~5° à 40°)"""
+    t = np.linspace(0, 1, length)
+    return 15 + 25*np.sin(2*np.pi*t - 0.2)
 
 def normal_knee(length=100):
-    t = np.linspace(0, 2*np.pi, length)
-    return 30*np.sin(t)**2  # 0° à 60°
+    """Flexion/extension genou (~0° à 60°)"""
+    t = np.linspace(0, 1, length)
+    return 60*np.sin(np.pi*t)**2
 
 def normal_ankle(length=100):
-    t = np.linspace(0, 2*np.pi, length)
-    return 10*np.sin(2*t)  # -10° à 10°
+    """Dorsiflexion/plantarflexion cheville (~-5° à 10°)"""
+    t = np.linspace(0, 1, length)
+    return -5 + 15*np.sin(2*np.pi*t + 0.1)
 
 # ==============================
 # EXPORT PDF
