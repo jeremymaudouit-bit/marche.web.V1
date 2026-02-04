@@ -435,5 +435,3 @@ if video and st.button("▶ Lancer l'analyse"):
             file_name=f"GaitScan_{nom}_{prenom}.pdf",
             mime="application/pdf"
         )
-
-
