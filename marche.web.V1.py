@@ -37,9 +37,7 @@ def rotate_if_landscape(img_np):
     return img_np
 
 def calculate_angle(p1, p2, p3):
-    """
-    Angle au point p2 entre segments p2->p1 et p2->p3
-    """
+    """Angle au point p2 entre segments p2->p1 et p2->p3."""
     v1 = np.array([p1[0]-p2[0], p1[1]-p2[1]], dtype=float)
     v2 = np.array([p3[0]-p2[0], p3[1]-p2[1]], dtype=float)
     dot = float(np.dot(v1, v2))
@@ -49,20 +47,33 @@ def calculate_angle(p1, p2, p3):
     return math.degrees(math.acos(np.clip(dot / mag, -1, 1)))
 
 def femur_tibia_knee_angle(hip, knee, ankle):
-    """
-    Genou = angle fémur–tibia => Hanche–Genou–Cheville
-    (Angle au genou)
-    """
+    """Genou = angle fémur–tibia => Hanche–Genou–Cheville."""
     return calculate_angle(hip, knee, ankle)
 
 def tibia_rearfoot_ankle_angle(knee, ankle, heel):
-    """
-    Cheville = angle tibia – arrière-pied
-    Tibia: segment cheville->genou
-    Arrière-pied: segment cheville->talon
-    => angle au niveau de la cheville: Genou–Cheville–Talon
-    """
+    """Cheville = angle tibia – arrière-pied => Genou–Cheville–Talon."""
     return calculate_angle(knee, ankle, heel)
+
+def safe_point(lm, landmark_enum, w, h):
+    p = lm[landmark_enum.value]
+    return np.array([p.x * w, p.y * h], dtype=np.float32), float(p.visibility)
+
+# -------- PDF safe (évite Unicode crash) --------
+def pdf_safe(text) -> str:
+    """
+    Rend le texte compatible FPDF (latin-1).
+    Convertit / supprime les caractères non supportés (accents, °, tirets longs…).
+    """
+    if text is None:
+        return ""
+    s = str(text)
+    s = (s.replace("°", " deg")
+           .replace("–", "-")
+           .replace("—", "-")
+           .replace("’", "'")
+           .replace("“", '"')
+           .replace("”", '"'))
+    return s.encode("latin-1", errors="ignore").decode("latin-1")
 
 def generate_pdf(data, img_np):
     pdf = FPDF()
@@ -73,15 +84,15 @@ def generate_pdf(data, img_np):
     pdf.rect(0, 0, 210, 40, 'F')
     pdf.set_text_color(255, 255, 255)
     pdf.set_font("Arial", 'B', 24)
-    pdf.cell(0, 20, "BILAN POSTURAL IA", ln=True, align="C")
+    pdf.cell(0, 20, pdf_safe("BILAN POSTURAL IA"), ln=True, align="C")
 
     # Infos Patient
     pdf.set_text_color(0, 0, 0)
     pdf.set_font("Arial", 'B', 12)
     pdf.ln(25)
-    pdf.cell(100, 10, f"Patient : {data['Nom']}", ln=0)
+    pdf.cell(100, 10, pdf_safe(f"Patient : {data.get('Nom','')}"), ln=0)
     pdf.set_font("Arial", '', 11)
-    pdf.cell(90, 10, f"Date : {datetime.now().strftime('%d/%m/%Y %H:%M')}", ln=1, align="R")
+    pdf.cell(90, 10, pdf_safe(f"Date : {datetime.now().strftime('%d/%m/%Y %H:%M')}"), ln=1, align="R")
     pdf.line(10, 68, 200, 68)
     pdf.ln(5)
 
@@ -95,22 +106,22 @@ def generate_pdf(data, img_np):
     # Tableau
     pdf.set_font("Arial", 'B', 12)
     pdf.set_fill_color(240, 240, 240)
-    pdf.cell(110, 10, "Indicateur de Mesure", 1, 0, 'L', True)
-    pdf.cell(80, 10, "Valeur", 1, 1, 'C', True)
+    pdf.cell(110, 10, pdf_safe("Indicateur de Mesure"), 1, 0, 'L', True)
+    pdf.cell(80, 10, pdf_safe("Valeur"), 1, 1, 'C', True)
 
     pdf.set_font("Arial", '', 11)
     for k, v in data.items():
         if k != "Nom":
-            pdf.cell(110, 9, f" {k}", 1, 0, 'L')
-            pdf.cell(80, 9, f" {v}", 1, 1, 'C')
+            pdf.cell(110, 9, " " + pdf_safe(k), 1, 0, 'L')
+            pdf.cell(80, 9, " " + pdf_safe(v), 1, 1, 'C')
 
     # Footer
     pdf.set_y(-25)
     pdf.set_font("Arial", 'I', 8)
     pdf.set_text_color(120, 120, 120)
-    pdf.cell(0, 10, "Document généré par Analyseur Postural Pro - Usage indicatif uniquement.", align="C")
+    pdf.cell(0, 10, pdf_safe("Document généré par Analyseur Postural Pro - Usage indicatif uniquement."), align="C")
 
-    filename = f"Bilan_{data['Nom'].replace(' ', '_')}.pdf"
+    filename = f"Bilan_{pdf_safe(data.get('Nom','Anonyme')).replace(' ', '_')}.pdf"
     pdf.output(filename)
 
     # Nettoyage
@@ -119,17 +130,13 @@ def generate_pdf(data, img_np):
 
     return filename
 
-def safe_point(lm, landmark_enum, w, h):
-    p = lm[landmark_enum.value]
-    return np.array([p.x * w, p.y * h], dtype=np.float32), float(p.visibility)
-
 # ================= 3. UI =================
 with st.sidebar:
     st.header("👤 Dossier Patient")
     nom = st.text_input("Nom complet", value="Anonyme")
     taille_cm = st.number_input("Taille (cm)", min_value=100, max_value=220, value=170)
 
-    # ✅ Choix manuel (pas d'automatique)
+    # Choix manuel (pas automatique)
     vue = st.selectbox("Vue de la photo", ["Face", "Dos"], index=0)
 
     st.divider()
@@ -168,19 +175,19 @@ if image_data:
                 lm = res.pose_landmarks.landmark
                 L = mp_pose.PoseLandmark
 
-                # Points + visibilité
-                LS, vis_LS = safe_point(lm, L.LEFT_SHOULDER, w, h)
-                RS, vis_RS = safe_point(lm, L.RIGHT_SHOULDER, w, h)
-                LH, vis_LH = safe_point(lm, L.LEFT_HIP, w, h)
-                RH, vis_RH = safe_point(lm, L.RIGHT_HIP, w, h)
-                LK, vis_LK = safe_point(lm, L.LEFT_KNEE, w, h)
-                RK, vis_RK = safe_point(lm, L.RIGHT_KNEE, w, h)
-                LA, vis_LA = safe_point(lm, L.LEFT_ANKLE, w, h)
-                RA, vis_RA = safe_point(lm, L.RIGHT_ANKLE, w, h)
-                LHE, vis_LHE = safe_point(lm, L.LEFT_HEEL, w, h)
-                RHE, vis_RHE = safe_point(lm, L.RIGHT_HEEL, w, h)
+                # Points
+                LS, _ = safe_point(lm, L.LEFT_SHOULDER, w, h)
+                RS, _ = safe_point(lm, L.RIGHT_SHOULDER, w, h)
+                LH, _ = safe_point(lm, L.LEFT_HIP, w, h)
+                RH, _ = safe_point(lm, L.RIGHT_HIP, w, h)
+                LK, _ = safe_point(lm, L.LEFT_KNEE, w, h)
+                RK, _ = safe_point(lm, L.RIGHT_KNEE, w, h)
+                LA, _ = safe_point(lm, L.LEFT_ANKLE, w, h)
+                RA, _ = safe_point(lm, L.RIGHT_ANKLE, w, h)
+                LHE, _ = safe_point(lm, L.LEFT_HEEL, w, h)
+                RHE, _ = safe_point(lm, L.RIGHT_HEEL, w, h)
 
-                # --- Inclinaison épaules / bassin (horizontale)
+                # Inclinaison épaules/bassin (par rapport à l'horizontale)
                 raw_shoulder_angle = math.degrees(math.atan2(LS[1]-RS[1], LS[0]-RS[0]))
                 shoulder_angle = abs(raw_shoulder_angle)
                 if shoulder_angle > 90:
@@ -191,25 +198,25 @@ if image_data:
                 if hip_angle > 90:
                     hip_angle = abs(hip_angle - 180)
 
-                # --- Genou : fémur-tibia (Hanche-Genou-Cheville)
+                # Genou: fémur–tibia (Hanche-Genou-Cheville)
                 knee_l = femur_tibia_knee_angle(LH, LK, LA)
                 knee_r = femur_tibia_knee_angle(RH, RK, RA)
 
-                # --- Cheville : tibia / arrière-pied (Genou-Cheville-Talon)
+                # Cheville: tibia–arrière-pied (Genou-Cheville-Talon)
                 ankle_l = tibia_rearfoot_ankle_angle(LK, LA, LHE)
                 ankle_r = tibia_rearfoot_ankle_angle(RK, RA, RHE)
 
-                # --- Échelle mm/pixel (approx) (épaules -> chevilles)
+                # Échelle mm/pixel (approx : épaules -> chevilles)
                 px_height = max(LA[1], RA[1]) - min(LS[1], RS[1])
                 mm_per_px = (float(taille_cm) * 10.0) / px_height if px_height > 0 else 0.0
                 diff_shoulders_mm = abs(LS[1] - RS[1]) * mm_per_px
                 diff_hips_mm = abs(LH[1] - RH[1]) * mm_per_px
 
-                # --- côté le plus bas (y plus grand = plus bas)
+                # Côté plus bas (y plus grand = plus bas)
                 shoulder_lower = "Gauche" if LS[1] > RS[1] else "Droite"
                 hip_lower = "Gauche" if LH[1] > RH[1] else "Droite"
 
-                # Inverser si photo de DOS (comme ton ancien code)
+                # Inversion si dos (comme ton ancien code)
                 if vue == "Dos":
                     shoulder_lower = "Droite" if shoulder_lower == "Gauche" else "Gauche"
                     hip_lower = "Droite" if hip_lower == "Gauche" else "Gauche"
@@ -217,16 +224,16 @@ if image_data:
                 # ================= ANNOTATION IMAGE =================
                 annotated = img_np.copy()
 
-                # Points (visuels)
+                # points
                 pts = [LS, RS, LH, RH, LK, RK, LA, RA, LHE, RHE]
                 for p in pts:
                     cv2.circle(annotated, tuple(p.astype(int)), 7, (0, 255, 0), -1)
 
-                # Lignes épaules/bassin
+                # lignes épaules/bassin
                 cv2.line(annotated, tuple(LS.astype(int)), tuple(RS.astype(int)), (255, 0, 0), 3)
                 cv2.line(annotated, tuple(LH.astype(int)), tuple(RH.astype(int)), (255, 0, 0), 3)
 
-                # Lignes segments genou/cheville pour “lecture” angles
+                # segments genou/cheville
                 cv2.line(annotated, tuple(LH.astype(int)), tuple(LK.astype(int)), (0, 255, 255), 2)
                 cv2.line(annotated, tuple(LK.astype(int)), tuple(LA.astype(int)), (0, 255, 255), 2)
                 cv2.line(annotated, tuple(LA.astype(int)), tuple(LHE.astype(int)), (0, 255, 255), 2)
@@ -235,30 +242,28 @@ if image_data:
                 cv2.line(annotated, tuple(RK.astype(int)), tuple(RA.astype(int)), (0, 255, 255), 2)
                 cv2.line(annotated, tuple(RA.astype(int)), tuple(RHE.astype(int)), (0, 255, 255), 2)
 
-                # Texte
-                cv2.putText(annotated, f"Vue choisie : {vue}",
+                # texte
+                cv2.putText(annotated, f"Vue: {vue}",
                             (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.75, (0, 0, 255), 2)
-
                 cv2.putText(annotated, f"Epaules: {shoulder_lower} plus basse ({diff_shoulders_mm:.1f} mm)",
                             (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 0, 255), 2)
-
                 cv2.putText(annotated, f"Bassin: {hip_lower} plus bas ({diff_hips_mm:.1f} mm)",
                             (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 0, 255), 2)
 
-                # ================= RESULTS =================
+                # ================= RESULTATS =================
                 results = {
                     "Nom": nom,
                     "Vue (choisie)": vue,
-                    "Inclinaison Épaules (Horizon = 0°)": f"{shoulder_angle:.1f}°",
-                    "Épaule la plus basse": shoulder_lower,
-                    "Dénivelé Épaules (mm)": f"{diff_shoulders_mm:.1f} mm",
-                    "Inclinaison Bassin (Horizon = 0°)": f"{hip_angle:.1f}°",
+                    "Inclinaison Epaules (horizon=0)": f"{shoulder_angle:.1f} deg",
+                    "Epaule la plus basse": shoulder_lower,
+                    "Denivele Epaules (mm)": f"{diff_shoulders_mm:.1f} mm",
+                    "Inclinaison Bassin (horizon=0)": f"{hip_angle:.1f} deg",
                     "Bassin le plus bas": hip_lower,
-                    "Dénivelé Bassin (mm)": f"{diff_hips_mm:.1f} mm",
-                    "Angle Genou Gauche (fémur–tibia)": f"{knee_l:.1f}°",
-                    "Angle Genou Droit (fémur–tibia)": f"{knee_r:.1f}°",
-                    "Cheville G (tibia–arrière-pied)": f"{ankle_l:.1f}°",
-                    "Cheville D (tibia–arrière-pied)": f"{ankle_r:.1f}°",
+                    "Denivele Bassin (mm)": f"{diff_hips_mm:.1f} mm",
+                    "Angle Genou Gauche (femur-tibia)": f"{knee_l:.1f} deg",
+                    "Angle Genou Droit (femur-tibia)": f"{knee_r:.1f} deg",
+                    "Cheville G (tibia-arriere-pied)": f"{ankle_l:.1f} deg",
+                    "Cheville D (tibia-arriere-pied)": f"{ankle_r:.1f} deg",
                 }
 
                 with col_result:
@@ -275,6 +280,3 @@ if image_data:
                             mime="application/pdf",
                             use_container_width=True
                         )
-
-                    # Optionnel : supprimer le PDF après download
-                    # os.remove(pdf_path)
