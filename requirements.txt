@@ -1,9 +1,8 @@
-streamlit>=1.24.0
-tensorflow>=2.14.0
-tensorflow-hub>=0.14.0
-tensorflow-addons>=0.20.0
-opencv-python-headless>=4.7.0
-numpy>=1.24.0
-matplotlib>=3.7.0
-reportlab>=3.6.14
-scipy>=1.11.0
+streamlit==1.32.2
+numpy==1.26.4
+matplotlib==3.8.4
+scipy==1.12.0
+reportlab==4.1.0
+opencv-python-headless==4.9.0.80
+mediapipe==0.10.11
+protobuf<5
