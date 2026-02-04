@@ -1,9 +1,7 @@
-streamlit==1.32.2
+streamlit
 numpy==1.26.4
-matplotlib==3.8.4
-scipy==1.12.0
-reportlab==4.1.0
-opencv-python-headless==4.9.0.80
-mediapipe==0.10.11
-protobuf<5
-
+opencv-python-headless
+Pillow
+fpdf2==2.7.9
+mediapipe==0.10.9
+protobuf==3.20.3
