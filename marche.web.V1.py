@@ -1,17 +1,17 @@
 import streamlit as st
 st.set_page_config(page_title="Analyseur Postural Pro (MediaPipe)", layout="wide")
 
+import os
+os.environ["MEDIAPIPE_DISABLE_TASKS"] = "1"
+
 import numpy as np
 import cv2
 from PIL import Image
 import math
 from fpdf import FPDF
 from datetime import datetime
-import os
 import tempfile
 import mediapipe as mp
-
-st.write("MediaPipe version :", mp.__version__)
 
 
 # ================= 1. CONFIG STREAMLIT =================
@@ -265,5 +265,6 @@ if image_data:
 
                     # Nettoyage du PDF si tu veux (optionnel) :
                     # os.remove(pdf_path)
+
 
 
