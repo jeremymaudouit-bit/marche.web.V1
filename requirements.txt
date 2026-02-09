@@ -1,6 +1,8 @@
-streamlit>=1.31
-numpy>=1.26
-pandas>=2.0
-matplotlib>=3.7
-scipy>=1.10
-reportlab>=4.0
+streamlit==1.32.2
+numpy==1.26.4
+scipy==1.11.4
+pandas==2.2.2
+matplotlib==3.8.4
+mediapipe==0.10.14
+opencv-python-headless==4.9.0.80
+reportlab==4.2.2
