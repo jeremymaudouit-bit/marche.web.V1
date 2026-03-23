@@ -124,7 +124,10 @@ def angle(a, b, c):
 
 def angle_hanche(e,h,g): return 180 - angle(e,h,g)
 def angle_genou(h,g,c): return 180 - angle(h,g,c)
-def angle_cheville(g,c,o): return angle(g,c,o)
+def angle_cheville(g, c, t, o):
+    jambe = g - c
+    pied = o - t
+    return angle_between(jambe, pied)
 
 
 # ==============================
@@ -215,7 +218,7 @@ def process_video(path, conf):
         )
 
         res["Cheville G"].append(
-            angle_cheville(kp["Genou G"], kp["Cheville G"], kp["Orteil G"])
+            angle_cheville(kp["Genou D"], kp["Cheville D"], kp["Talon D"], kp["Orteil D"])
             if (ok("Genou G") and ok("Cheville G") and ok("Orteil G")) else np.nan
         )
         res["Cheville D"].append(
